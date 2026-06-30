@@ -1,6 +1,6 @@
 # TPT Cloud-Native
 
-[![License](https://img.shields.io/badge/license-Apache%202.0-blue.svg)](LICENSE)
+[![License](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](LICENSE)
 
 An open-source, unified cloud-native tooling suite — from local development to the edge.
 
@@ -25,25 +25,19 @@ git clone https://github.com/tpt-solutions/tpt-cloud-native.git && cd tpt-cloud-
 # 2. Build the Rust workspace
 cargo build --workspace
 
-# 3. Build frontend dashboards
-cd scope/dashboard && npm install && npm run build && cd ../..
-
-# 4. Start Origin with a manifest
-cargo run -p tpt-origin -- up -m manifest.yaml
-
-# 5. Start Tether proxy
-cargo run -p tpt-tether -- serve --config tether.yaml
+# 3. Build the Go components
+go build ./...
 ```
 
 ## Products
 
-| Product | Description |
-|---------|-------------|
-| **Origin** | Unified local sandbox — OCI containers + Wasm side by side |
-| **Tether** | State & connection proxy for Wasm workloads |
-| **Scope** | Hybrid eBPF observability — zero-code distributed tracing |
-| **Chisel** | Automated image distiller & Wasm migrator |
-| **Frontier** | Wasm-native edge service mesh & API gateway |
+| Product | Description | Docs |
+|---------|-------------|------|
+| **Origin** | Unified local sandbox — OCI containers + Wasm side by side | [origin/README.md](origin/README.md) |
+| **Tether** | State & connection proxy for Wasm workloads | [tether/README.md](tether/README.md) |
+| **Scope** | Hybrid eBPF observability — zero-code distributed tracing | [scope/README.md](scope/README.md) |
+| **Chisel** | Automated image distiller & Wasm migrator | [chisel/README.md](chisel/README.md) |
+| **Frontier** | Wasm-native edge service mesh & API gateway | [frontier/README.md](frontier/README.md) |
 
 ## Monorepo Structure
 

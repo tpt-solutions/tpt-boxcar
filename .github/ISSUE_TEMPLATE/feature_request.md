@@ -1,39 +1,22 @@
 ---
-name: Feature Request
-about: Suggest a new feature for TPT Cloud Native
-title: "[Feature] "
+name: Feature request
+about: Suggest an idea for this project
+title: '[FEAT] '
 labels: enhancement
 assignees: ''
 ---
 
-## Problem Statement
+**Product**
+Which TPT product does this relate to? (Origin / Tether / Scope / Chisel / Frontier / Cross-cutting)
 
-What problem does this feature solve?
+**Is your feature request related to a problem?**
+A clear and concise description of the problem.
 
-## Proposed Solution
+**Describe the solution you'd like**
+A clear and concise description of what you want.
 
-Describe your preferred approach.
+**Alternatives considered**
+Any alternative solutions or features you've considered.
 
-## Alternatives Considered
-
-Other approaches you evaluated.
-
-## Scope Impact
-
-Which TPT component(s) does this affect?
-
-- [ ] Origin (lifecycle, manifest, CLI, GUI)
-- [ ] Chisel (analysis, distillation)
-- [ ] Tether (proxy, DB drivers)
-- [ ] Frontier (routing, plugins)
-- [ ] Scope (agent, backend)
-
-## Proposed Timeline
-
-- [ ] Nice to have
-- [ ] Targeting next release
-- [ ] Blocking / high priority
-
-## Additional Context
-
-Any other information, mockups, or references.
+**Additional context**
+Any other context, mockups, or examples.

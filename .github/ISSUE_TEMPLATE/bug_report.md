@@ -1,53 +1,27 @@
 ---
-name: Bug Report
-about: Report a bug in TPT Cloud Native
-title: "[Bug] "
+name: Bug report
+about: Create a report to help us improve
+title: '[BUG] '
 labels: bug
 assignees: ''
 ---
 
-## Description
+**Product**
+Which TPT product is affected? (Origin / Tether / Scope / Chisel / Frontier)
 
-A clear description of the bug.
+**Describe the bug**
+A clear and concise description of what the bug is.
 
-## Steps to Reproduce
+**To Reproduce**
+Steps to reproduce the behavior.
 
-1. 
-2. 
-3. 
-
-## Expected Behavior
-
+**Expected behavior**
 What you expected to happen.
 
-## Actual Behavior
+**Environment**
+- OS: [e.g. Ubuntu 22.04, macOS 14, Windows 11 WSL2]
+- Rust version: [e.g. 1.78]
+- Go version: [e.g. 1.22]
 
-What actually happened.
-
-## Component
-
-Which TPT product is affected?
-
-- [ ] Origin (lifecycle, manifest, CLI, GUI)
-- [ ] Chisel (analysis, distillation, migration)
-- [ ] Tether (proxy, DB drivers, connection pool)
-- [ ] Frontier (routing, plugins, TLS)
-- [ ] Scope (agent, backend, dashboard)
-
-## Environment
-
-- **OS**: 
-- **TPT Version**: 
-- **Rust toolchain**: 
-- **Go version** (if applicable): 
-- **Node version** (if applicable): 
-
-## Logs / Error Output
-
-```
-(paste relevant logs here)
-```
-
-## Additional Context
-
-Any other information that might help diagnose the issue (screenshots, config files, etc.).
+**Additional context**
+Add any other context, logs, or screenshots here.
