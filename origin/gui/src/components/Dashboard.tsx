@@ -9,14 +9,17 @@ import {
 export default function Dashboard() {
   const [services, setServices] = useState<Service[]>([]);
   const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
   const [actionPending, setActionPending] = useState<string | null>(null);
 
   const fetchServices = useCallback(async () => {
     try {
       const data = await listServices();
       setServices(data);
+      setError(null);
     } catch (err) {
       console.error("Failed to list services:", err);
+      setError(err instanceof Error ? err.message : String(err));
     } finally {
       setLoading(false);
     }
@@ -28,17 +31,25 @@ export default function Dashboard() {
     return () => clearInterval(id);
   }, [fetchServices]);
 
-  const handleToggle = async (svc: Service) => {
-    setActionPending(svc.name);
+  const handleStart = async (svc: Service) => {
+    setActionPending(svc.id);
     try {
-      if (svc.status === "running") {
-        await stopService(svc.name);
-      } else {
-        await startService(svc.name);
-      }
+      await startService(svc.id);
       await fetchServices();
     } catch (err) {
-      console.error(`Failed to toggle ${svc.name}:`, err);
+      console.error(`Failed to start ${svc.name}:`, err);
+    } finally {
+      setActionPending(null);
+    }
+  };
+
+  const handleStop = async (svc: Service) => {
+    setActionPending(svc.id);
+    try {
+      await stopService(svc.id);
+      await fetchServices();
+    } catch (err) {
+      console.error(`Failed to stop ${svc.name}:`, err);
     } finally {
       setActionPending(null);
     }
@@ -48,7 +59,17 @@ export default function Dashboard() {
     return (
       <div>
         <h2>Services</h2>
-        <p>Loading services...</p>
+        <p className="loading-spinner">Loading services...</p>
+      </div>
+    );
+  }
+
+  if (error) {
+    return (
+      <div>
+        <h2>Services</h2>
+        <div className="error">Error: {error}</div>
+        <button onClick={fetchServices}>Retry</button>
       </div>
     );
   }
@@ -60,43 +81,44 @@ export default function Dashboard() {
         <thead>
           <tr>
             <th>Name</th>
-            <th>Type</th>
+            <th>Kind</th>
             <th>Status</th>
-            <th>CPU</th>
-            <th>RAM</th>
+            <th>CPU (%)</th>
+            <th>Mem (MB)</th>
             <th>Actions</th>
           </tr>
         </thead>
         <tbody>
           {services.map((svc) => (
-            <tr key={svc.name}>
+            <tr key={svc.id}>
               <td>{svc.name}</td>
-              <td>{svc.type.toUpperCase()}</td>
+              <td>{svc.kind.toUpperCase()}</td>
               <td className={`status-${svc.status}`}>{svc.status}</td>
-              <td>{svc.cpu}</td>
-              <td>{svc.ram}</td>
+              <td>{svc.cpu.toFixed(1)}</td>
+              <td>{svc.memMb}</td>
               <td>
                 <button
-                  onClick={() => handleToggle(svc)}
-                  disabled={actionPending === svc.name}
+                  onClick={() => handleStart(svc)}
+                  disabled={
+                    actionPending === svc.id || svc.status === "running"
+                  }
                 >
-                  {actionPending === svc.name
-                    ? "Working..."
-                    : svc.status === "running"
-                      ? "Stop"
-                      : "Start"}
+                  {actionPending === svc.id ? "Working..." : "Start"}
+                </button>
+                <button
+                  onClick={() => handleStop(svc)}
+                  disabled={
+                    actionPending === svc.id || svc.status === "stopped"
+                  }
+                  style={{ marginLeft: "0.5rem" }}
+                >
+                  {actionPending === svc.id ? "Working..." : "Stop"}
                 </button>
               </td>
             </tr>
           ))}
         </tbody>
       </table>
-
-      <h2>System Resources</h2>
-      <div className="resources">
-        <p>Total CPU: 2.4%</p>
-        <p>Total RAM: 144MB / 16384MB</p>
-      </div>
     </div>
   );
 }

@@ -1,11 +1,11 @@
 import { useState, useEffect, useRef } from "react";
-import { streamLogs, type LogEntry } from "../api/tauriApi";
+import { streamLogs, type LogEvent } from "../api/tauriApi";
 
 export default function Logs() {
-  const [logs, setLogs] = useState<LogEntry[]>([]);
+  const [logs, setLogs] = useState<LogEvent[]>([]);
   const [filter, setFilter] = useState("");
   const [autoScroll, setAutoScroll] = useState(true);
-  const [loading, setLoading] = useState(true);
+  const [listening, setListening] = useState(false);
   const endRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -13,10 +13,9 @@ export default function Logs() {
 
     streamLogs((entry) => {
       setLogs((prev) => [...prev, entry]);
-      setLoading(false);
     }).then((fn) => {
       unlisten = fn;
-      setLoading(false);
+      setListening(true);
     });
 
     return () => {
@@ -33,9 +32,12 @@ export default function Logs() {
   const filtered = logs.filter(
     (log) =>
       !filter ||
-      log.message.toLowerCase().includes(filter.toLowerCase()) ||
+      log.line.toLowerCase().includes(filter.toLowerCase()) ||
       log.service.toLowerCase().includes(filter.toLowerCase())
   );
+
+  const formatTimestamp = (ts: number) =>
+    new Date(ts).toISOString().replace("T", " ").slice(0, 23);
 
   return (
     <div>
@@ -47,19 +49,26 @@ export default function Logs() {
           value={filter}
           onChange={(e) => setFilter(e.target.value)}
         />
-        <button onClick={() => setAutoScroll((prev) => !prev)}>
-          Auto-scroll: {autoScroll ? "On" : "Off"}
-        </button>
+        <label style={{ display: "flex", alignItems: "center", gap: "0.4rem" }}>
+          <input
+            type="checkbox"
+            checked={autoScroll}
+            onChange={(e) => setAutoScroll(e.target.checked)}
+          />
+          Auto-scroll
+        </label>
       </div>
-      {loading ? (
-        <p>Waiting for log events...</p>
+      {!listening ? (
+        <p>Connecting to log stream...</p>
       ) : (
         <pre className="log-output">
           {filtered.map((log, i) => (
             <div key={i}>
-              <span className="log-timestamp">[{log.timestamp}]</span>{" "}
+              <span className="log-timestamp">
+                [{formatTimestamp(log.timestamp)}]
+              </span>{" "}
               <span className="log-service">[{log.service}]</span>{" "}
-              {log.message}
+              {log.line}
             </div>
           ))}
           <div ref={endRef} />

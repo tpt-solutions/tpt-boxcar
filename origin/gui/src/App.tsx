@@ -4,6 +4,7 @@ import { useKeyboardShortcuts } from "./hooks/useKeyboardShortcuts";
 import Dashboard from "./components/Dashboard";
 import Logs from "./components/Logs";
 import ManifestEditor from "./components/ManifestEditor";
+import ErrorBoundary from "./components/ErrorBoundary";
 
 type View = "dashboard" | "logs" | "editor";
 
@@ -15,7 +16,7 @@ function ThemeToggleButton() {
       title={`Switch to ${theme === "dark" ? "light" : "dark"} mode`}
       className="theme-toggle"
     >
-      {theme === "dark" ? "\u2600" : "\u263E"}
+      {theme === "dark" ? "☀" : "☾"}
     </button>
   );
 }
@@ -70,9 +71,21 @@ function AppInner() {
           color: "var(--text-primary, #e6edf3)",
         }}
       >
-        {view === "dashboard" && <Dashboard />}
-        {view === "logs" && <Logs />}
-        {view === "editor" && <ManifestEditor />}
+        {view === "dashboard" && (
+          <ErrorBoundary>
+            <Dashboard />
+          </ErrorBoundary>
+        )}
+        {view === "logs" && (
+          <ErrorBoundary>
+            <Logs />
+          </ErrorBoundary>
+        )}
+        {view === "editor" && (
+          <ErrorBoundary>
+            <ManifestEditor />
+          </ErrorBoundary>
+        )}
       </main>
     </div>
   );
