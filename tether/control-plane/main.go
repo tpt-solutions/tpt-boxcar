@@ -1,12 +1,36 @@
 package main
 
 import (
+	"crypto/subtle"
 	"encoding/json"
 	"fmt"
 	"log"
 	"net/http"
+	"os"
 	"sync"
 )
+
+// apiKeyMiddleware returns 401 if the X-API-Key header is missing or doesn't
+// match the TETHER_API_KEY environment variable (constant-time compare).
+// If TETHER_API_KEY is not set, all requests are allowed through (dev mode).
+func apiKeyMiddleware(next http.HandlerFunc) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		expected := os.Getenv("TETHER_API_KEY")
+		if expected == "" {
+			// No key configured — allow through (dev mode).
+			next(w, r)
+			return
+		}
+		got := r.Header.Get("X-API-Key")
+		if subtle.ConstantTimeCompare([]byte(got), []byte(expected)) != 1 {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusUnauthorized)
+			json.NewEncoder(w).Encode(map[string]string{"error": "unauthorized"})
+			return
+		}
+		next(w, r)
+	}
+}
 
 type Backend struct {
 	ID       string            `json:"id"`
@@ -105,8 +129,8 @@ func (cs *ConfigServer) handleHealth(w http.ResponseWriter, r *http.Request) {
 func main() {
 	cs := NewConfigServer()
 
-	http.HandleFunc("/api/v1/backends", cs.handleBackends)
-	http.HandleFunc("/api/v1/routes", cs.handleRoutes)
+	http.HandleFunc("/api/v1/backends", apiKeyMiddleware(cs.handleBackends))
+	http.HandleFunc("/api/v1/routes", apiKeyMiddleware(cs.handleRoutes))
 	http.HandleFunc("/health", cs.handleHealth)
 
 	addr := ":8080"

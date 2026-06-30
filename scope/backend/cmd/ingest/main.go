@@ -27,7 +27,7 @@ func main() {
 	chAddr := flag.String("clickhouse-addr", "localhost:9000", "ClickHouse native protocol address")
 	chDB := flag.String("clickhouse-db", "default", "ClickHouse database")
 	chUser := flag.String("clickhouse-user", "default", "ClickHouse user")
-	chPass := flag.String("clickhouse-pass", "", "ClickHouse password (fallback; prefer CLICKHOUSE_PASS env var)")
+	chPass := flag.String("clickhouse-pass", "", "Deprecated: use CLICKHOUSE_PASS env var instead")
 	grpcPort := flag.Int("grpc-port", 4317, "OTLP gRPC receiver port")
 	httpPort := flag.Int("http-port", 4318, "OTLP HTTP receiver port")
 	metricsPort := flag.Int("metrics-port", 9090, "Prometheus metrics port")
@@ -35,10 +35,13 @@ func main() {
 	flushInterval := flag.Duration("flush-interval", 5*time.Second, "Flush interval to ClickHouse")
 	flag.Parse()
 
-	// Resolve ClickHouse password: env var takes precedence over CLI flag.
-	password := *chPass
-	if envPass := os.Getenv("CLICKHOUSE_PASS"); envPass != "" {
-		password = envPass
+	// Resolve ClickHouse password: env var takes precedence over the deprecated CLI flag.
+	password := os.Getenv("CLICKHOUSE_PASS")
+	if password == "" {
+		password = *chPass
+	}
+	if password == "" {
+		log.Fatal("ClickHouse password must be provided via CLICKHOUSE_PASS env var (or deprecated -clickhouse-pass flag)")
 	}
 
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
