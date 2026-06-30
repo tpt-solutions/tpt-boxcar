@@ -1,6 +1,7 @@
 import { useState, useEffect } from "react";
 import { getServices } from "../api/client";
 import type { ServiceNode } from "../api/types";
+import { useRefreshInterval } from "./RefreshPicker";
 
 const HEALTH_COLOR: Record<string, string> = {
   healthy: "#2ecc71",
@@ -21,6 +22,7 @@ export default function ServiceGraph() {
   const [services, setServices] = useState<ServiceNode[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const { interval } = useRefreshInterval();
 
   const fetchData = async () => {
     try {
@@ -35,9 +37,10 @@ export default function ServiceGraph() {
 
   useEffect(() => {
     fetchData();
-    const id = setInterval(fetchData, 10_000);
+    if (interval === 0) return;
+    const id = setInterval(fetchData, interval * 1000);
     return () => clearInterval(id);
-  }, []);
+  }, [interval]);
 
   if (loading) return <div style={{ padding: "2rem", color: "#666" }}>Loading...</div>;
   if (error) return <div style={{ padding: "2rem", color: "#f85149" }}>Error: {error}</div>;

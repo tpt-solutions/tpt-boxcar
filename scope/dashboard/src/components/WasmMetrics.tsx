@@ -1,11 +1,13 @@
 import { useState, useEffect } from "react";
 import { getWasmMetrics } from "../api/client";
 import type { WasmModule } from "../api/types";
+import { useRefreshInterval } from "./RefreshPicker";
 
 export default function WasmMetrics() {
   const [modules, setModules] = useState<WasmModule[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const { interval } = useRefreshInterval();
 
   const fetchData = async () => {
     try {
@@ -20,9 +22,10 @@ export default function WasmMetrics() {
 
   useEffect(() => {
     fetchData();
-    const id = setInterval(fetchData, 10_000);
+    if (interval === 0) return;
+    const id = setInterval(fetchData, interval * 1000);
     return () => clearInterval(id);
-  }, []);
+  }, [interval]);
 
   if (loading) return <div style={{ padding: "2rem", color: "#666" }}>Loading...</div>;
   if (error) return <div style={{ padding: "2rem", color: "#f85149" }}>Error: {error}</div>;

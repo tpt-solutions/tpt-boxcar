@@ -1,6 +1,37 @@
 import { useState, useEffect } from "react";
 import { getLogs } from "../api/client";
 import type { LogEntry } from "../api/types";
+import { useRefreshInterval } from "./RefreshPicker";
+
+function CopyButton({ text }: { text: string }) {
+  const [copied, setCopied] = useState(false);
+
+  const handleCopy = () => {
+    navigator.clipboard.writeText(text).then(() => {
+      setCopied(true);
+      setTimeout(() => setCopied(false), 1500);
+    });
+  };
+
+  return (
+    <button
+      onClick={handleCopy}
+      title="Copy log line"
+      style={{
+        background: "transparent",
+        border: "none",
+        cursor: "pointer",
+        padding: "0 4px",
+        fontSize: "0.85rem",
+        opacity: copied ? 1 : 0.4,
+        color: copied ? "#58a6ff" : "inherit",
+        flexShrink: 0,
+      }}
+    >
+      {copied ? "Copied!" : "⎘"}
+    </button>
+  );
+}
 
 export default function LogViewer() {
   const [logs, setLogs] = useState<LogEntry[]>([]);
@@ -9,6 +40,7 @@ export default function LogViewer() {
   const [serviceFilter, setServiceFilter] = useState("");
   const [severityFilter, setSeverityFilter] = useState("");
   const [search, setSearch] = useState("");
+  const { interval } = useRefreshInterval();
 
   const fetchLogs = async () => {
     try {
@@ -23,9 +55,10 @@ export default function LogViewer() {
 
   useEffect(() => {
     fetchLogs();
-    const id = setInterval(fetchLogs, 3_000);
+    if (interval === 0) return;
+    const id = setInterval(fetchLogs, interval * 1000);
     return () => clearInterval(id);
-  }, []);
+  }, [interval]);
 
   const filtered = logs.filter(
     (log) =>
@@ -58,20 +91,26 @@ export default function LogViewer() {
         <div style={{ color: "#f85149" }}>Error: {error}</div>
       ) : (
         <pre style={{ background: "#0d1117", color: "#c9d1d9", padding: "1rem", borderRadius: 4, fontSize: "0.85rem" }}>
-          {filtered.map((log, i) => (
-            <div key={i}>
-              <span style={{ color: "#8b949e" }}>{log.time}</span>{" "}
-              <span
-                style={{
-                  color:
-                    log.severity === "error" ? "#f85149" : log.severity === "warn" ? "#d29922" : "#58a6ff",
-                }}
-              >
-                [{log.service}]
-              </span>{" "}
-              {log.message}
-            </div>
-          ))}
+          {filtered.map((log, i) => {
+            const lineText = `${log.time} [${log.service}] ${log.message}`;
+            return (
+              <div key={i} style={{ display: "flex", alignItems: "baseline" }}>
+                <CopyButton text={lineText} />
+                <span>
+                  <span style={{ color: "#8b949e" }}>{log.time}</span>{" "}
+                  <span
+                    style={{
+                      color:
+                        log.severity === "error" ? "#f85149" : log.severity === "warn" ? "#d29922" : "#58a6ff",
+                    }}
+                  >
+                    [{log.service}]
+                  </span>{" "}
+                  {log.message}
+                </span>
+              </div>
+            );
+          })}
         </pre>
       )}
     </div>

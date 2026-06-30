@@ -1,7 +1,7 @@
-import { useState, useCallback } from "react";
+import { useState, useCallback, useRef } from "react";
 import { ThemeProvider, useTheme } from "./components/ThemeToggle";
 import { useKeyboardShortcuts } from "./hooks/useKeyboardShortcuts";
-import Dashboard from "./components/Dashboard";
+import Dashboard, { type DashboardHandle } from "./components/Dashboard";
 import Logs from "./components/Logs";
 import ManifestEditor from "./components/ManifestEditor";
 import ErrorBoundary from "./components/ErrorBoundary";
@@ -31,10 +31,27 @@ export default function App() {
 
 function AppInner() {
   const [view, setView] = useState<View>("dashboard");
+  const dashboardRef = useRef<DashboardHandle>(null);
 
   const handleLogs = useCallback(() => setView("logs"), []);
+  const handleStart = useCallback(() => {
+    setView("dashboard");
+    // Allow state update to flush before calling ref method
+    setTimeout(() => dashboardRef.current?.startFirst(), 0);
+  }, []);
+  const handleStop = useCallback(() => {
+    setView("dashboard");
+    setTimeout(() => dashboardRef.current?.stopFirst(), 0);
+  }, []);
+  const handleRestart = useCallback(() => {
+    setView("dashboard");
+    setTimeout(() => dashboardRef.current?.restartFirst(), 0);
+  }, []);
 
   useKeyboardShortcuts({
+    onStart: handleStart,
+    onStop: handleStop,
+    onRestart: handleRestart,
     onLogs: handleLogs,
   });
 
@@ -73,7 +90,7 @@ function AppInner() {
       >
         {view === "dashboard" && (
           <ErrorBoundary>
-            <Dashboard />
+            <Dashboard ref={dashboardRef} />
           </ErrorBoundary>
         )}
         {view === "logs" && (

@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useImperativeHandle, forwardRef } from "react";
 import {
   listServices,
   startService,
@@ -6,7 +6,13 @@ import {
   type Service,
 } from "../api/tauriApi";
 
-export default function Dashboard() {
+export interface DashboardHandle {
+  startFirst: () => void;
+  stopFirst: () => void;
+  restartFirst: () => void;
+}
+
+const Dashboard = forwardRef<DashboardHandle>(function Dashboard(_props, ref) {
   const [services, setServices] = useState<Service[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -31,27 +37,63 @@ export default function Dashboard() {
     return () => clearInterval(id);
   }, [fetchServices]);
 
-  const handleStart = async (svc: Service) => {
-    setActionPending(svc.id);
+  const doStart = useCallback(async (id: string) => {
+    setActionPending(id);
     try {
-      await startService(svc.id);
+      await startService(id);
       await fetchServices();
     } catch (err) {
-      console.error(`Failed to start ${svc.name}:`, err);
+      console.error(`Failed to start ${id}:`, err);
     } finally {
       setActionPending(null);
     }
-  };
+  }, [fetchServices]);
 
-  const handleStop = async (svc: Service) => {
-    setActionPending(svc.id);
+  const doStop = useCallback(async (id: string) => {
+    setActionPending(id);
     try {
-      await stopService(svc.id);
+      await stopService(id);
       await fetchServices();
     } catch (err) {
-      console.error(`Failed to stop ${svc.name}:`, err);
+      console.error(`Failed to stop ${id}:`, err);
     } finally {
       setActionPending(null);
+    }
+  }, [fetchServices]);
+
+  const doRestart = useCallback(async (id: string) => {
+    setActionPending(id);
+    try {
+      await stopService(id);
+      await startService(id);
+      await fetchServices();
+    } catch (err) {
+      console.error(`Failed to restart ${id}:`, err);
+    } finally {
+      setActionPending(null);
+    }
+  }, [fetchServices]);
+
+  useImperativeHandle(ref, () => ({
+    startFirst: () => {
+      const first = services[0];
+      if (first) doStart(first.id);
+    },
+    stopFirst: () => {
+      const first = services[0];
+      if (first) doStop(first.id);
+    },
+    restartFirst: () => {
+      const first = services[0];
+      if (first) doRestart(first.id);
+    },
+  }), [services, doStart, doStop, doRestart]);
+
+  const handleToggle = async (svc: Service) => {
+    if (svc.status === "running") {
+      await doStop(svc.id);
+    } else {
+      await doStart(svc.id);
     }
   };
 
@@ -98,7 +140,7 @@ export default function Dashboard() {
               <td>{svc.memMb}</td>
               <td>
                 <button
-                  onClick={() => handleStart(svc)}
+                  onClick={() => doStart(svc.id)}
                   disabled={
                     actionPending === svc.id || svc.status === "running"
                   }
@@ -106,7 +148,7 @@ export default function Dashboard() {
                   {actionPending === svc.id ? "Working..." : "Start"}
                 </button>
                 <button
-                  onClick={() => handleStop(svc)}
+                  onClick={() => doStop(svc.id)}
                   disabled={
                     actionPending === svc.id || svc.status === "stopped"
                   }
@@ -121,4 +163,6 @@ export default function Dashboard() {
       </table>
     </div>
   );
-}
+});
+
+export default Dashboard;
