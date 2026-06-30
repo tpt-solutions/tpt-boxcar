@@ -7,6 +7,7 @@ import TraceWaterfall from "./components/TraceWaterfall";
 import MetricsCharts from "./components/MetricsCharts";
 import LogViewer from "./components/LogViewer";
 import WasmMetrics from "./components/WasmMetrics";
+import ErrorBoundary from "./components/ErrorBoundary";
 
 type View = "graph" | "traces" | "metrics" | "wasm" | "logs";
 
@@ -94,11 +95,11 @@ function AppInner() {
         </div>
       </nav>
       <main style={{ flex: 1, padding: "1rem", overflow: "auto" }}>
-        {view === "graph" && <ServiceGraph />}
-        {view === "traces" && <TraceWaterfall />}
-        {view === "metrics" && <MetricsCharts />}
-        {view === "wasm" && <WasmMetrics />}
-        {view === "logs" && <LogViewer />}
+        {view === "graph" && <ErrorBoundary><ServiceGraph /></ErrorBoundary>}
+        {view === "traces" && <ErrorBoundary><TraceWaterfall /></ErrorBoundary>}
+        {view === "metrics" && <ErrorBoundary><MetricsCharts /></ErrorBoundary>}
+        {view === "wasm" && <ErrorBoundary><WasmMetrics /></ErrorBoundary>}
+        {view === "logs" && <ErrorBoundary><LogViewer /></ErrorBoundary>}
       </main>
     </div>
   );

@@ -5,6 +5,7 @@ import type { LogEntry } from "../api/types";
 export default function LogViewer() {
   const [logs, setLogs] = useState<LogEntry[]>([]);
   const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
   const [serviceFilter, setServiceFilter] = useState("");
   const [severityFilter, setSeverityFilter] = useState("");
   const [search, setSearch] = useState("");
@@ -12,8 +13,9 @@ export default function LogViewer() {
   const fetchLogs = async () => {
     try {
       setLogs(await getLogs());
-    } catch {
-      // keep existing logs on error
+      setError(null);
+    } catch (e: unknown) {
+      setError(e instanceof Error ? e.message : "Failed to load");
     } finally {
       setLoading(false);
     }
@@ -52,6 +54,8 @@ export default function LogViewer() {
       </div>
       {loading && logs.length === 0 ? (
         <div style={{ color: "#666" }}>Loading...</div>
+      ) : error && logs.length === 0 ? (
+        <div style={{ color: "#f85149" }}>Error: {error}</div>
       ) : (
         <pre style={{ background: "#0d1117", color: "#c9d1d9", padding: "1rem", borderRadius: 4, fontSize: "0.85rem" }}>
           {filtered.map((log, i) => (
