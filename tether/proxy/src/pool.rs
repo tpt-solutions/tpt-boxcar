@@ -5,7 +5,7 @@ use anyhow::{Context, Result};
 use dashmap::DashMap;
 use serde::{Deserialize, Serialize};
 use tokio::sync::{mpsc, Mutex, Semaphore};
-use tracing::{debug, info};
+use tracing::{debug, info, warn};
 
 use crate::drivers::{DatabaseConfig, WireDriver};
 
@@ -113,6 +113,7 @@ impl ConnectionPool {
                 .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
             self.connections.insert(id, Mutex::new(conn));
             let _ = self.idle_connections.send(id).await;
+            self.idle_count.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         }
 
         info!(total = self.connections.len(), "pool initialized");
@@ -156,18 +157,30 @@ impl ConnectionPool {
                 let mut conn = entry.lock().await;
                 let idle_duration = conn.last_used.elapsed();
                 if idle_duration < Duration::from_secs(self.config.idle_timeout_secs) {
-                    conn.last_used = Instant::now();
+                    // Ping the connection before handing it to the caller; drop it if dead.
+                    match conn.driver.ping().await {
+                        Ok(()) => {
+                            conn.last_used = Instant::now();
+                            self.idle_count.fetch_sub(1, std::sync::atomic::Ordering::Relaxed);
+                            return Ok(PooledConnectionGuard {
+                                id,
+                                pool: self,
+                                _permit: permit,
+                            });
+                        }
+                        Err(e) => {
+                            warn!(id, err = %e, "idle connection failed ping, dropping");
+                            drop(conn);
+                            self.connections.remove(&id);
+                            self.idle_count.fetch_sub(1, std::sync::atomic::Ordering::Relaxed);
+                        }
+                    }
+                } else {
+                    drop(conn);
+                    self.connections.remove(&id);
                     self.idle_count.fetch_sub(1, std::sync::atomic::Ordering::Relaxed);
-                    return Ok(PooledConnectionGuard {
-                        id,
-                        pool: self,
-                        _permit: permit,
-                    });
+                    debug!(id, "removed stale idle connection");
                 }
-                drop(conn);
-                self.connections.remove(&id);
-                self.idle_count.fetch_sub(1, std::sync::atomic::Ordering::Relaxed);
-                debug!(id, "removed stale idle connection");
             }
         }
 
