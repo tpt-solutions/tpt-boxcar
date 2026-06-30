@@ -1,0 +1,65 @@
+name: "TPT Chisel — Image Distiller"
+description: "Analyze and distill Docker images to minimal distroless containers"
+author: "tpt-cloud-native"
+branding:
+  icon: "scissors"
+  color: "blue"
+
+inputs:
+  image:
+    description: "Docker image to distill"
+    required: true
+  output:
+    description: "Output image name"
+    required: false
+    default: ""
+  scan-cve:
+    description: "Run CVE scan on the distilled image"
+    required: false
+    default: "true"
+  generate-sbom:
+    description: "Generate SBOM (CycloneDX or SPDX)"
+    required: false
+    default: "true"
+  sbom-format:
+    description: "SBOM format: cyclonedx or spdx"
+    required: false
+    default: "cyclonedx"
+
+runs:
+  using: "docker"
+  image: "ghcr.io/tpt-cloud-native/chisel:latest"
+  args:
+    - "distill"
+    - "--image"
+    - "${{ inputs.image }}"
+    - "--output"
+    - "${{ inputs.output }}"
+    - "--scan-cve"
+    - "${{ inputs.scan-cve }}"
+    - "--sbom"
+    - "${{ inputs.generate-sbom }}"
+    - "--sbom-format"
+    - "${{ inputs.sbom-format }}"
+
+outputs:
+  distilled-image:
+    description: "Name of the distilled image"
+    value: ${{ steps.distill.outputs.image }}
+  sbom-path:
+    description: "Path to generated SBOM file"
+    value: ${{ steps.distill.outputs.sbom }}
+  cve-report:
+    description: "Path to CVE scan report"
+    value: ${{ steps.distill.outputs.cve-report }}
+
+steps:
+  - name: Distill image
+    id: distill
+    run: |
+      chisel distill \
+        --image "${{ inputs.image }}" \
+        --output "${{ inputs.output }}" \
+        --scan-cve "${{ inputs.scan-cve }}" \
+        --sbom "${{ inputs.generate-sbom }}" \
+        --sbom-format "${{ inputs.sbom-format }}"

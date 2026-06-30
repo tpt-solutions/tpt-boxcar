@@ -1,0 +1,48 @@
+{
+  "$schema": "https://raw.githubusercontent.com/nicehash/tauri/v2/tooling/cli/schema.json",
+  "productName": "TPT Origin",
+  "identifier": "com.tpt-cloud-native.origin",
+  "build": {
+    "beforeDevCommand": "npm run dev",
+    "devUrl": "http://localhost:1420",
+    "beforeBuildCommand": "npm run build",
+    "frontendDist": "../dist"
+  },
+  "app": {
+    "title": "TPT Origin",
+    "windows": [
+      {
+        "title": "TPT Origin — Local Sandbox",
+        "width": 1200,
+        "height": 800,
+        "resizable": true,
+        "fullscreen": false
+      }
+    ],
+    "security": {
+      "csp": null
+    }
+  },
+  "bundle": {
+    "active": true,
+    "targets": ["dmg", "app"],
+    "icon": [
+      "icons/32x32.png",
+      "icons/128x128.png",
+      "icons/128x128@2x.png",
+      "icons/icon.icns"
+    ],
+    "macOS": {
+      "frameworks": [],
+      "minimumSystemVersion": "10.15",
+      "dmg": {
+        "appPosition": { "x": 180, "y": 170 },
+        "applicationFolderPosition": { "x": 480, "y": 170 },
+        "windowSize": { "width": 660, "height": 400 }
+      },
+      "signingIdentity": null,
+      "entitlements": null,
+      "exceptionDomain": "localhost"
+    }
+  }
+}

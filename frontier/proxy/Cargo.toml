@@ -1,0 +1,36 @@
+[package]
+name = "tpt-frontier-proxy"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+tokio.workspace = true
+hyper = { version = "1", features = ["full"] }
+hyper-util = { version = "0.1", features = ["full"] }
+http-body-util = "0.1"
+http = "1"
+bytes = "1"
+serde.workspace = true
+serde_json.workspace = true
+anyhow.workspace = true
+thiserror.workspace = true
+tracing.workspace = true
+rustls = "0.23"
+rustls-pemfile = "2"
+tokio-rustls = "0.26"
+wasmtime = "25"
+parking_lot = "0.12"
+sha2 = "0.10"
+jsonwebtoken = "9"
+rand = "0.8"
+base64 = "0.22"
+reqwest = { version = "0.12", features = ["json"] }
+
+[dev-dependencies]
+criterion = { version = "0.5", features = ["html_reports"] }
+tokio = { workspace = true, features = ["full"] }
+
+[[bench]]
+name = "proxy_bench"
+harness = false

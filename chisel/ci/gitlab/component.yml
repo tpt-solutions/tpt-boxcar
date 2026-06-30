@@ -1,0 +1,38 @@
+spec:
+  inputs:
+    image:
+      description: "Docker image to distill"
+      type: string
+      required: true
+    output:
+      description: "Output image name"
+      type: string
+      default: ""
+    scan-cve:
+      description: "Run CVE scan"
+      type: boolean
+      default: true
+    sbom-format:
+      description: "SBOM format: cyclonedx or spdx"
+      type: string
+      default: "cyclonedx"
+
+chisel-distill:
+  image: ghcr.io/tpt-cloud-native/chisel:latest
+  script:
+    - chisel distill
+      --image "$IMAGE"
+      --output "$OUTPUT"
+      --scan-cve "$SCAN_CVE"
+      --sbom true
+      --sbom-format "$SBOM_FORMAT"
+  variables:
+    IMAGE: $IMAGE
+    OUTPUT: $OUTPUT
+    SCAN_CVE: $SCAN_CVE
+    SBOM_FORMAT: $SBOM_FORMAT
+  artifacts:
+    paths:
+      - sbom.*
+      - cve-report.*
+    expire_in: 30 days

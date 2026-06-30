@@ -1,0 +1,94 @@
+syntax = "proto3";
+
+package frontier.v1;
+
+import "types.proto";
+
+option go_package = "github.com/tpt-cloud-native/frontier/control-plane/internal/pb/frontier/v1;frontierv1";
+
+// FrontierConfig is the control-plane gRPC service exposed to data-plane proxies.
+service FrontierConfig {
+  // WatchConfig streams the full snapshot on connect, then incremental diffs.
+  rpc WatchConfig(WatchConfigRequest) returns (stream ConfigEvent);
+
+  // CRUD RPCs for routes.
+  rpc ListRoutes(ListRoutesRequest) returns (ListRoutesResponse);
+  rpc GetRoute(GetRouteRequest) returns (Route);
+  rpc CreateRoute(CreateRouteRequest) returns (Route);
+  rpc UpdateRoute(UpdateRouteRequest) returns (Route);
+  rpc DeleteRoute(DeleteRouteRequest) returns (DeleteRouteResponse);
+
+  // CRUD RPCs for upstreams.
+  rpc ListUpstreams(ListUpstreamsRequest) returns (ListUpstreamsResponse);
+  rpc GetUpstream(GetUpstreamRequest) returns (Upstream);
+  rpc CreateUpstream(CreateUpstreamRequest) returns (Upstream);
+  rpc UpdateUpstream(UpdateUpstreamRequest) returns (Upstream);
+  rpc DeleteUpstream(DeleteUpstreamRequest) returns (DeleteUpstreamResponse);
+}
+
+// --- Watch ---
+
+message WatchConfigRequest {
+  int64 last_known_version = 1;
+}
+
+message ConfigEvent {
+  oneof event {
+    ConfigSnapshot snapshot = 1;
+    ConfigDiff diff = 2;
+  }
+}
+
+// --- Routes ---
+
+message ListRoutesRequest {}
+message ListRoutesResponse {
+  repeated Route routes = 1;
+}
+
+message GetRouteRequest {
+  string name = 1;
+}
+
+message CreateRouteRequest {
+  Route route = 1;
+}
+
+message UpdateRouteRequest {
+  Route route = 1;
+}
+
+message DeleteRouteRequest {
+  string name = 1;
+}
+
+message DeleteRouteResponse {
+  bool success = 1;
+}
+
+// --- Upstreams ---
+
+message ListUpstreamsRequest {}
+message ListUpstreamsResponse {
+  repeated Upstream upstreams = 1;
+}
+
+message GetUpstreamRequest {
+  string name = 1;
+}
+
+message CreateUpstreamRequest {
+  Upstream upstream = 1;
+}
+
+message UpdateUpstreamRequest {
+  Upstream upstream = 1;
+}
+
+message DeleteUpstreamRequest {
+  string name = 1;
+}
+
+message DeleteUpstreamResponse {
+  bool success = 1;
+}

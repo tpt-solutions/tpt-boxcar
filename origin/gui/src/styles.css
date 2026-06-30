@@ -1,0 +1,59 @@
+.app {
+  display: flex;
+  height: 100vh;
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+}
+
+.sidebar {
+  width: 200px;
+  background: #1a1a2e;
+  color: #fff;
+  padding: 1rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.sidebar button {
+  background: transparent;
+  border: 1px solid #333;
+  color: #fff;
+  padding: 0.5rem;
+  border-radius: 4px;
+  cursor: pointer;
+  text-align: left;
+}
+
+.sidebar button:hover {
+  background: #16213e;
+}
+
+.sidebar button.active {
+  background: #0f3460;
+}
+
+.logo {
+  font-size: 1.2rem;
+  margin-bottom: 1rem;
+}
+
+.content {
+  flex: 1;
+  padding: 1rem;
+  overflow-y: auto;
+}
+
+table {
+  width: 100%;
+  border-collapse: collapse;
+}
+
+th, td {
+  padding: 0.5rem;
+  text-align: left;
+  border-bottom: 1px solid #ddd;
+}
+
+.status-running { color: #2ecc71; }
+.status-stopped { color: #e74c3c; }
+.status-starting { color: #f39c12; }

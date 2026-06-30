@@ -1,0 +1,33 @@
+{
+  "name": "@tpt-cloud-native/frontier-plugin-sdk",
+  "version": "0.1.0",
+  "description": "TypeScript SDK for TPT Frontier Wasm plugins",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "tsc",
+    "clean": "rm -rf dist",
+    "prepublishOnly": "npm run build"
+  },
+  "keywords": [
+    "tpt",
+    "frontier",
+    "wasm",
+    "plugin",
+    "edge",
+    "proxy"
+  ],
+  "author": "TPT Cloud Native",
+  "license": "Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/tpt-cloud-native/tpt-cloud-native",
+    "directory": "frontier/typescript-sdk"
+  },
+  "devDependencies": {
+    "typescript": "^5.4.0"
+  }
+}

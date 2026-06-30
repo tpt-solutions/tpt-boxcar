@@ -1,0 +1,18 @@
+[package]
+name = "tpt-origin"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "tpt"
+path = "src/main.rs"
+
+[dependencies]
+tpt-origin-core = { path = "../core" }
+tokio.workspace = true
+anyhow.workspace = true
+clap = { version = "4", features = ["derive"] }
+tracing.workspace = true
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+serde_yaml.workspace = true

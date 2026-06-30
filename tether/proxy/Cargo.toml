@@ -1,0 +1,27 @@
+[package]
+name = "tpt-tether-proxy"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+tokio.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+anyhow.workspace = true
+thiserror.workspace = true
+tracing.workspace = true
+async-trait = "0.1"
+dashmap = "6"
+tokio-rustls = "0.26"
+rustls = "0.23"
+rustls-pemfile = "2"
+rustls-pki-types = "1"
+webpki-roots = "0.26"
+md5 = "0.7"
+hex = "0.4"
+sha1 = "0.10"
+sha2 = "0.10"
+hmac = "0.12"
+base64 = "0.22"
+rand = "0.8"

@@ -1,0 +1,57 @@
+# Rust
+/target
+**/*.rs.bk
+
+# Go
+/bin/
+/vendor/
+
+# Node
+node_modules/
+dist/
+.vite/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# IDE
+.vscode/*
+!.vscode/settings.json
+.idea/
+
+# Build artifacts
+*.o
+*.so
+*.dylib
+
+# Environment
+.env
+.env.*
+
+# Wasm build outputs
+*.wasm
+
+# Go
+go.work.sum
+coverage.out
+*.test
+
+# Protobuf generated files
+*.pb.go
+*.pb.rs
+
+# Tauri nested target
+src-tauri/target/
+
+# ClickHouse local data
+clickhouse-data/
+clickhouse_data/
+
+# Playwright test results
+playwright-report/
+test-results/
+
+# Logs
+*.log
+logs/

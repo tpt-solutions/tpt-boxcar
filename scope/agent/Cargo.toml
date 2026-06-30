@@ -1,0 +1,19 @@
+[package]
+name = "tpt-scope-agent"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+tokio.workspace = true
+anyhow.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+opentelemetry = { version = "0.24", default-features = false, features = ["trace", "metrics"] }
+opentelemetry-otlp = { version = "0.17", features = ["trace", "metrics", "logs"] }
+opentelemetry_sdk = { version = "0.24", features = ["rt-tokio", "trace", "metrics"] }
+opentelemetry-semantic-conventions = "0.16"
+prost = "0.13"
