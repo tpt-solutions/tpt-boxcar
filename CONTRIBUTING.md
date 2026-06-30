@@ -2,31 +2,105 @@
 
 Thank you for your interest in contributing! This document covers how to set up your development environment and the conventions for branches, commits, and pull requests.
 
-## Prerequisites
+## Development Environment Setup
+
+### Prerequisites
 
 - **Rust** (stable toolchain) — `rustup update stable`
+  - Add the `wasm32-wasi` target: `rustup target add wasm32-wasi`
 - **Go** 1.22+
-- **Node.js** 18+
+- **Node.js** 20+
+- **protoc** (Protocol Buffers compiler) — required for Frontier's gRPC types
+  - macOS: `brew install protobuf`
+  - Ubuntu/Debian: `apt install protobuf-compiler`
+  - Windows: download from [github.com/protocolbuffers/protobuf/releases](https://github.com/protocolbuffers/protobuf/releases)
 - **Docker** (for containerd-based Origin features)
 
-## Development Setup
+### Cloning and Workspace Setup
 
 ```bash
 # Clone the repository
 git clone https://github.com/tpt-solutions/tpt-cloud-native.git
 cd tpt-cloud-native
 
-# Build Rust workspace
-cargo build
+# Build the entire Rust workspace (all seven crates)
+cargo build --workspace
 
-# Build Go components
-cd tether/control-plane && go build ./... && cd ../..
-cd chisel/core && go build ./... && cd ../..
+# Build Go components (go.work covers all three modules)
+go build ./tether/control-plane/...
+go build ./scope/backend/...
+go build ./frontier/control-plane/...
 
 # Install frontend dependencies
 cd scope/dashboard && npm install && cd ../..
 cd origin/gui && npm install && cd ../..
 ```
+
+### Code Style Tools
+
+**Rust** — format with `rustfmt` (enforced in CI):
+
+```bash
+cargo fmt --all           # reformat all crates
+cargo fmt --all -- --check  # CI check (fails on diff)
+cargo clippy --workspace -- -D warnings  # lint; warnings are errors
+```
+
+**Go** — format with `gofmt` and lint with `golangci-lint`:
+
+```bash
+gofmt -w .               # reformat all Go source in the current module
+golangci-lint run ./...  # run from any Go module dir or repo root
+```
+
+**TypeScript** — format and lint with Prettier/ESLint via npm scripts:
+
+```bash
+cd scope/dashboard && npm run lint   # Scope React dashboard
+cd origin/gui && npm run lint        # Origin Tauri GUI
+```
+
+### PR Conventions
+
+**Branch naming** — use one of the following prefixes:
+
+| Prefix | Purpose |
+|--------|---------|
+| `feat/` | New feature (e.g. `feat/origin-ebpf-networking`) |
+| `fix/` | Bug fix (e.g. `fix/tether-pool-exhaustion`) |
+| `chore/` | CI, tooling, dependency, or maintenance work |
+| `docs/` | Documentation-only changes |
+| `refactor/` | Code restructuring with no behaviour change |
+
+**Commit message format** — we follow [Conventional Commits](https://www.conventionalcommits.org/):
+
+```
+<type>(<scope>): <description>
+
+[optional body — explain *why*, not just *what*]
+
+[optional footer(s) — e.g. Closes #42, BREAKING CHANGE: ...]
+```
+
+**Types:** `feat`, `fix`, `docs`, `style`, `refactor`, `perf`, `test`, `build`, `ci`, `chore`, `revert`
+
+**Scopes** (product area): `origin`, `tether`, `scope`, `chisel`, `frontier`, `workspace`, `docs`
+
+**Examples:**
+
+```
+feat(origin): add DNS resolver for .local domains
+fix(tether): handle connection pool exhaustion gracefully
+docs(chisel): add Wasm migration troubleshooting guide
+chore(workspace): upgrade tokio to 1.38
+```
+
+**PR description** — use the `.github/PULL_REQUEST_TEMPLATE.md` provided in the repo. At a minimum include:
+
+- A short summary of what the PR does and why.
+- The issue(s) it closes (`Closes #<number>`).
+- The type of change (bug fix / new feature / breaking change / docs / refactor).
+- Confirmation that `cargo fmt`, `cargo clippy`, `gofmt`, and `golangci-lint` all pass and that tests have been added or updated.
 
 ## Branch Strategy
 
