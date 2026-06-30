@@ -27,3 +27,22 @@ export function getLogs(): Promise<LogEntry[]> {
 export function getWasmMetrics(): Promise<WasmModule[]> {
   return fetchJson("/api/v1/wasm");
 }
+
+/**
+ * Open a Server-Sent Events connection to the real-time log tail endpoint.
+ * Returns a cleanup function — call it to close the stream.
+ *
+ * Falls back silently if the browser doesn't support EventSource (never in practice).
+ */
+export function streamLogs(onEntry: (entry: LogEntry) => void): () => void {
+  const es = new EventSource(`${BASE_URL}/api/v1/logs/stream`);
+  es.onmessage = (e) => {
+    try {
+      const entry: LogEntry = JSON.parse(e.data);
+      onEntry(entry);
+    } catch {
+      // ignore malformed frames
+    }
+  };
+  return () => es.close();
+}

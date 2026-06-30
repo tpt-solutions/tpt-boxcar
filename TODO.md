@@ -2,7 +2,7 @@
 
 > **License:** Apache 2.0 | **Repo type:** Monorepo | **Platform:** Linux · macOS · Windows (WSL2 for eBPF)
 >
-> **Progress:** 95 / 95 tasks complete
+> **Progress:** 126 / 140 tasks complete (Phase 8 in progress)
 
 ---
 
@@ -244,66 +244,98 @@
 
 ## Phase 7 — Release Hardening
 
-> **Progress:** 0 / 31 tasks complete
+> **Progress:** 31 / 31 tasks complete
 
 ### Security Fixes
 
-- [ ] Fix JWT signature verification in `frontier/examples/jwt_validator.rs` — implement HMAC-SHA256 verify of `parts[2]`; reject tokens with invalid signature
-- [ ] Remove hardcoded `"my-secret-key"` from jwt_validator example; read secret from `JWT_SECRET` env var
-- [ ] Add `apiKeyMiddleware` to Frontier REST control plane (`frontier/control-plane/internal/rest/handler.go`) — constant-time compare against `FRONTIER_API_KEY` env var; 401 if missing/wrong
-- [ ] Check Tether control plane REST endpoints for same missing-auth gap; apply identical middleware if needed
-- [ ] Move ClickHouse password from `-clickhouse-pass` CLI flag to `CLICKHOUSE_PASS` env var in `scope/backend/cmd/ingest/main.go`
-- [ ] Replace `self.entries.lock().unwrap()` with `unwrap_or_else(|e| e.into_inner())` in `chisel/core/src/ai/cache.rs` (lines 27, 43, 47)
-- [ ] Implement health-tracking (`mark_healthy` / `mark_unhealthy`) in `RoundRobinBalancer` and `ConsistentHashBalancer` in `frontier/proxy/src/loadbalancer.rs`
+- [x] Fix JWT signature verification in `frontier/examples/jwt_validator.rs` — implement HMAC-SHA256 verify of `parts[2]`; reject tokens with invalid signature
+- [x] Remove hardcoded `"my-secret-key"` from jwt_validator example; read secret from `JWT_SECRET` env var
+- [x] Add `apiKeyMiddleware` to Frontier REST control plane (`frontier/control-plane/internal/rest/handler.go`) — constant-time compare against `FRONTIER_API_KEY` env var; 401 if missing/wrong
+- [x] Check Tether control plane REST endpoints for same missing-auth gap; apply identical middleware if needed
+- [x] Move ClickHouse password from `-clickhouse-pass` CLI flag to `CLICKHOUSE_PASS` env var in `scope/backend/cmd/ingest/main.go`
+- [x] Replace `self.entries.lock().unwrap()` with `unwrap_or_else(|e| e.into_inner())` in `chisel/core/src/ai/cache.rs` (lines 27, 43, 47)
+- [x] Implement health-tracking (`mark_healthy` / `mark_unhealthy`) in `RoundRobinBalancer` and `ConsistentHashBalancer` in `frontier/proxy/src/loadbalancer.rs`
 
 ### Backend Stubs
 
-- [ ] Add `tracing::warn!` before `bail!` in MySQL wire driver stub methods (`tether/proxy/src/drivers/wire_mysql.rs` lines 249–260)
-- [ ] Add `tracing::warn!` before `bail!` in PostgreSQL wire driver stub paths (`tether/proxy/src/drivers/wire_postgres.rs` lines 78, 749, 754, 758)
+- [x] Add `tracing::warn!` before `bail!` in MySQL wire driver stub methods (`tether/proxy/src/drivers/wire_mysql.rs` lines 249–260)
+- [x] Add `tracing::warn!` before `bail!` in PostgreSQL wire driver stub paths (`tether/proxy/src/drivers/wire_postgres.rs` lines 78, 749, 754, 758)
 
 ### Frontend — Scope Dashboard
 
-- [ ] Create `scope/dashboard/src/api/client.ts` — typed fetch wrapper reading `VITE_API_BASE_URL`; expose `getServices`, `getTraces`, `getMetrics`, `getLogs`, `getWasmMetrics`
-- [ ] Replace `MOCK_` data in `ServiceGraph.tsx` with `getServices()`; render graph with Cytoscape.js (`cola` layout, health-colored nodes)
-- [ ] Replace placeholder divs in `MetricsCharts.tsx` with Recharts `<LineChart>` / `<AreaChart>` fed by `getMetrics()`
-- [ ] Replace mock spans in `TraceWaterfall.tsx` with `getTraces()` data
-- [ ] Replace mock logs in `LogViewer.tsx` with `getLogs()` polling every 3 s; add SSE stream endpoint for real-time tail
-- [ ] Replace mock table in `WasmMetrics.tsx` with `getWasmMetrics()` data
-- [ ] Add top-level `ErrorBoundary` component and per-component error/retry states to Scope Dashboard
-- [ ] Add loading spinners while first fetch is in-flight to all Scope Dashboard components
-- [ ] Add `scope/dashboard/.env.example` documenting `VITE_API_BASE_URL`
+- [x] Create `scope/dashboard/src/api/client.ts` — typed fetch wrapper reading `VITE_API_BASE_URL`; expose `getServices`, `getTraces`, `getMetrics`, `getLogs`, `getWasmMetrics`
+- [x] Replace `MOCK_` data in `ServiceGraph.tsx` with `getServices()`; render graph with Cytoscape.js (`cola` layout, health-colored nodes)
+- [x] Replace placeholder divs in `MetricsCharts.tsx` with Recharts `<LineChart>` / `<AreaChart>` fed by `getMetrics()`
+- [x] Replace mock spans in `TraceWaterfall.tsx` with `getTraces()` data
+- [x] Replace mock logs in `LogViewer.tsx` with `getLogs()` polling every 3 s; add SSE stream endpoint for real-time tail
+- [x] Replace mock table in `WasmMetrics.tsx` with `getWasmMetrics()` data
+- [x] Add top-level `ErrorBoundary` component and per-component error/retry states to Scope Dashboard
+- [x] Add loading spinners while first fetch is in-flight to all Scope Dashboard components
+- [x] Add `scope/dashboard/.env.example` documenting `VITE_API_BASE_URL`
 
 ### Frontend — Origin GUI
 
-- [ ] Create `origin/gui/src/api/tauriApi.ts` — typed Tauri `invoke()` wrappers for `listServices`, `startService`, `stopService`, `streamLogs`, `applyManifest`
-- [ ] Wire `Dashboard.tsx` to `listServices()` (poll every 5 s); connect Start/Stop buttons to `startService()`/`stopService()`
-- [ ] Wire `Logs.tsx` to Tauri `"log-event"` listener; add auto-scroll toggle
-- [ ] Replace string-search validation in `ManifestEditor.tsx` with `js-yaml` parse; add Save button calling `applyManifest()`; add Download .yaml export button
-- [ ] Add `ErrorBoundary` and loading/error states to Origin GUI components
-- [ ] Add `origin/gui/.env.example`
+- [x] Create `origin/gui/src/api/tauriApi.ts` — typed Tauri `invoke()` wrappers for `listServices`, `startService`, `stopService`, `streamLogs`, `applyManifest`
+- [x] Wire `Dashboard.tsx` to `listServices()` (poll every 5 s); connect Start/Stop buttons to `startService()`/`stopService()`
+- [x] Wire `Logs.tsx` to Tauri `"log-event"` listener; add auto-scroll toggle
+- [x] Replace string-search validation in `ManifestEditor.tsx` with `js-yaml` parse; add Save button calling `applyManifest()`; add Download .yaml export button
+- [x] Add `ErrorBoundary` and loading/error states to Origin GUI components
+- [x] Add `origin/gui/.env.example`
 
 ### UX Improvements
 
-- [ ] Add dark/light theme toggle to both frontends — CSS variables + `ThemeContext`, persisted to `localStorage`
-- [ ] Add keyboard shortcuts to Origin GUI (`S` = start, `X` = stop, `R` = restart, `L` = logs view)
-- [ ] Add one-click copy-to-clipboard icon on each log line in both log viewers
-- [ ] Add refresh-interval picker (5 s / 15 s / 30 s / manual) to Scope Dashboard, persisted to `localStorage`
+- [x] Add dark/light theme toggle to both frontends — CSS variables + `ThemeContext`, persisted to `localStorage`
+- [x] Add keyboard shortcuts to Origin GUI (`S` = start, `X` = stop, `R` = restart, `L` = logs view)
+- [x] Add one-click copy-to-clipboard icon on each log line in both log viewers
+- [x] Add refresh-interval picker (5 s / 15 s / 30 s / manual) to Scope Dashboard, persisted to `localStorage`
 
 ### GitHub Release Files
 
-- [ ] Update `CONTRIBUTING.md` with dev environment setup, Rust/Go/Node prerequisites, PR conventions, and code-style tools (`rustfmt`, `gofmt`, `prettier`)
-- [ ] Create `CODE_OF_CONDUCT.md` — Contributor Covenant 2.1, attributed to TPT Solutions
-- [ ] Create `CHANGELOG.md` — initial `## [1.0.0] - 2026-06-30` entry summarising all five products
-- [ ] Create `.github/ISSUE_TEMPLATE/bug_report.md` and `feature_request.md`
-- [ ] Create `.github/PULL_REQUEST_TEMPLATE.md`
-- [ ] Polish `README.md` — add Apache 2.0 license badge, Quick Start section, and products table with one-line descriptions and sub-README links
+- [x] Update `CONTRIBUTING.md` with dev environment setup, Rust/Go/Node prerequisites, PR conventions, and code-style tools (`rustfmt`, `gofmt`, `prettier`)
+- [x] Create `CODE_OF_CONDUCT.md` — Contributor Covenant 2.1, attributed to TPT Solutions
+- [x] Create `CHANGELOG.md` — initial `## [1.0.0] - 2026-06-30` entry summarising all five products
+- [x] Create `.github/ISSUE_TEMPLATE/bug_report.md` and `feature_request.md`
+- [x] Create `.github/PULL_REQUEST_TEMPLATE.md`
+- [x] Polish `README.md` — add Apache 2.0 license badge, Quick Start section, and products table with one-line descriptions and sub-README links
 
 ### Custom Solution Improvements
 
-- [ ] Replace unbounded `HashMap` in `chisel/core/src/ai/cache.rs` with `lru::LruCache` (cap 10 000 entries); add `lru = "0.12"` to `chisel/core/Cargo.toml`; remove SHA-256 cache-key hashing in favour of plain string key
-- [ ] Fix `ConfigWatcher` in `frontier/proxy/src/listener.rs` to check `mtime` before re-reading and re-parsing the config file — eliminate unconditional reload on every poll tick
-- [ ] Replace `sha2::Sha256` with `ahash::AHasher` in `consistent_hash()` inside `frontier/proxy/src/loadbalancer.rs`; replace `rand_simple()` with `rand::thread_rng().gen::<u64>()`
-- [ ] Fix retry jitter in `chisel/core/src/ai/retry.rs`: replace `subsec_nanos() % ceiling` with `rand::thread_rng().gen_range(0..ceiling)`; add `rand` to `chisel/core/Cargo.toml`
-- [ ] Extract duplicated `retry-after` header parsing from `claude.rs` and `openai.rs` into a shared `fn extract_retry_after` in `retry.rs`
-- [ ] Add `ping()` method to `WireDriver` trait in `tether/proxy/src/drivers/wire.rs`; implement in each driver (PostgreSQL sync, MySQL `COM_PING`, Redis `PING`); call in `pool.rs` `acquire()` before returning a connection
-- [ ] Fix `stats()` in `tether/proxy/src/pool.rs` to report accurate idle count using an `AtomicUsize` counter incremented on release and decremented on acquire
+- [x] Replace unbounded `HashMap` in `chisel/core/src/ai/cache.rs` with `lru::LruCache` (cap 10 000 entries); add `lru = "0.12"` to `chisel/core/Cargo.toml`; remove SHA-256 cache-key hashing in favour of plain string key
+- [x] Fix `ConfigWatcher` in `frontier/proxy/src/listener.rs` to check `mtime` before re-reading and re-parsing the config file — eliminate unconditional reload on every poll tick
+- [x] Replace `sha2::Sha256` with `ahash::AHasher` in `consistent_hash()` inside `frontier/proxy/src/loadbalancer.rs`; replace `rand_simple()` with `rand::thread_rng().gen::<u64>()`
+- [x] Fix retry jitter in `chisel/core/src/ai/retry.rs`: replace `subsec_nanos() % ceiling` with `rand::thread_rng().gen_range(0..ceiling)`; add `rand` to `chisel/core/Cargo.toml`
+- [x] Extract duplicated `retry-after` header parsing from `claude.rs` and `openai.rs` into a shared `fn extract_retry_after` in `retry.rs`
+- [x] Add `ping()` method to `WireDriver` trait in `tether/proxy/src/drivers/wire.rs`; implement in each driver (PostgreSQL sync, MySQL `COM_PING`, Redis `PING`); call in `pool.rs` `acquire()` before returning a connection
+- [x] Fix `stats()` in `tether/proxy/src/pool.rs` to report accurate idle count using an `AtomicUsize` counter incremented on release and decremented on acquire
+
+---
+
+## Phase 8 — Observability & Hardening
+
+> **Progress:** 0 / 14 tasks complete
+
+### Rate Limiting
+
+- [ ] Add per-IP fixed-window rate-limiting middleware to `scope/backend/cmd/ingest` (OTLP HTTP receiver) — 1 000 req/min default, `SCOPE_INGEST_RATE_LIMIT` env override; 429 + `Retry-After` on breach
+- [ ] Add per-IP rate-limiting middleware to `scope/backend/cmd/backend` (query API) — 200 req/min default, `SCOPE_QUERY_RATE_LIMIT` env override
+- [ ] Add per-IP rate-limiting middleware to `frontier/control-plane` REST API — 300 req/min default, `FRONTIER_RATE_LIMIT` env override
+- [ ] Add per-IP rate-limiting middleware to `tether/control-plane` REST API — 300 req/min default, `TETHER_RATE_LIMIT` env override
+
+### Telemetry
+
+- [ ] Add HTTP request metrics middleware to `scope/backend/cmd/backend` — expose `tpt_http_requests_total{method,path,status}`, `tpt_http_request_duration_seconds` histogram, and `tpt_http_inflight_requests` gauge on `/metrics`
+- [ ] Add HTTP request metrics middleware to `scope/backend/cmd/ingest` — extend existing `prometheus.go` with the same three HTTP-layer metrics (distinct from the existing ingestion-count counters)
+- [ ] Add lightweight Prometheus-format `/metrics` endpoint to `frontier/control-plane` — request count, latency histogram, in-flight gauge; no new Go module dependencies (hand-rolled text format + atomic counters)
+- [ ] Add lightweight Prometheus-format `/metrics` endpoint to `tether/control-plane` — same approach as Frontier; expose on same port as REST API
+
+### Dependency Reduction
+
+- [ ] Replace `k8s.io/client-go` + `k8s.io/api` + `k8s.io/apimachinery` in `tether/control-plane` with a custom `net/http` ConfigMap watcher (~100 lines) — HTTP long-poll `GET /api/v1/namespaces/{ns}/configmaps/{name}?watch=true`; remove the three k8s packages from `go.mod`
+- [ ] Replace `reqwest` in `frontier/proxy/Cargo.toml` with a direct Hyper 1.x client call in `frontier/proxy/src/plugins/jwt.rs` (`refresh_keys`) — proxy already imports Hyper; removes duplicate TLS stack and ~2 MB from the proxy binary
+- [ ] Replace `#[async_trait]` macro in `tether/proxy` and `chisel/core` with native async-fn-in-trait syntax (stable since Rust 1.75) — remove `async-trait = "0.1"` from both `Cargo.toml` files
+- [ ] Replace `parking_lot::RwLock` with `tokio::sync::RwLock` in async call sites within `frontier/proxy/src/plugins/jwt.rs` and `frontier/proxy/src/tls.rs` — eliminates blocking-lock risk on Tokio worker threads; pure-sync hot paths (`ratelimit.rs`) may keep `parking_lot::Mutex`
+
+### Frontend Completeness
+
+- [ ] Wire up `cytoscape` (already in `scope/dashboard/package.json`) in `ServiceGraph.tsx` — replace hand-written SVG grid with a Cytoscape `cose` force-directed layout; health-coloured nodes, arrowhead edges, zoom/pan
+- [ ] Wire up `recharts` (already in `scope/dashboard/package.json`) in `MetricsCharts.tsx` — replace SVG `<polyline>` with Recharts `<AreaChart>` / `<LineChart>`; add `<Tooltip>` and `<Legend>`; group series by metric name

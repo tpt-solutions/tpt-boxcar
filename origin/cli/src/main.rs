@@ -100,7 +100,7 @@ services:
       - host: 5432
         container: 5432
     environment:
-      POSTGRES_PASSWORD: changeme
+      POSTGRES_PASSWORD: CHANGE_ME  # WARNING: replace with a strong password before use
     volumes:
       - source: pgdata
         target: /var/lib/postgresql/data

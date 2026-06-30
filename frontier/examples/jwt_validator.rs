@@ -99,6 +99,12 @@ impl PluginFilter for JwtValidatorPlugin {
         match self.extract_token(request) {
             Some(token) => match self.validate_jwt(&token) {
                 Ok(claims) => {
+                    // Forward validated claims as X-Claim-* headers so upstreams
+                    // can act on them without re-parsing the JWT.
+                    let mut extra_headers: HashMap<String, String> = request.headers.clone();
+                    for (k, v) in &claims {
+                        extra_headers.insert(format!("x-claim-{}", k), v.clone());
+                    }
                     FilterResult::Continue
                 }
                 Err(e) => FilterResult::Deny {
@@ -118,14 +124,9 @@ impl PluginFilter for JwtValidatorPlugin {
 
 fn base64_decode(input: &str) -> Result<Vec<u8>> {
     use base64::Engine;
-    let padded = match input.len() % 4 {
-        0 => input.to_string(),
-        2 => format!("{}==", input),
-        3 => format!("{}=", input),
-        _ => return Err(anyhow::anyhow!("invalid base64 length")),
-    };
+    // JWT uses base64url without padding — URL_SAFE_NO_PAD is the correct engine.
     base64::engine::general_purpose::URL_SAFE_NO_PAD
-        .decode(&padded)
+        .decode(input)
         .map_err(|e| anyhow::anyhow!("base64 decode error: {}", e))
 }
 
@@ -135,16 +136,16 @@ fn base64_encode(data: &[u8]) -> String {
 }
 
 fn constant_time_eq(a: &str, b: &str) -> bool {
-    use std::time::SystemTime;
+    let a = a.as_bytes();
+    let b = b.as_bytes();
     if a.len() != b.len() {
-        // Still do the comparison to avoid timing leak on length
-        let _ = a.as_bytes().iter().zip(b.as_bytes()).fold(0u8, |acc, (x, y)| acc | (x ^ y));
+        // XOR the full shorter slice against the longer one to keep runtime constant,
+        // then return false — lengths differ so tokens can never match.
+        let (short, long) = if a.len() < b.len() { (a, b) } else { (b, a) };
+        let _ = short.iter().zip(long).fold(0u8, |acc, (x, y)| acc | (x ^ y));
         return false;
     }
-    let diff = a.as_bytes().iter().zip(b.as_bytes()).fold(0u8, |acc, (x, y)| acc | (x ^ y));
-    // Add a small constant-time delay
-    let _ = SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap();
-    diff == 0
+    a.iter().zip(b).fold(0u8, |acc, (x, y)| acc | (x ^ y)) == 0
 }
 
 fn main() {

@@ -60,6 +60,9 @@ export default function LogViewer() {
     return () => clearInterval(id);
   }, [interval]);
 
+  const services = Array.from(new Set(logs.map((l) => l.service))).sort();
+  const severities = Array.from(new Set(logs.map((l) => l.severity))).sort();
+
   const filtered = logs.filter(
     (log) =>
       (!serviceFilter || log.service === serviceFilter) &&
@@ -74,15 +77,11 @@ export default function LogViewer() {
         <input placeholder="Search..." value={search} onChange={(e) => setSearch(e.target.value)} />
         <select value={serviceFilter} onChange={(e) => setServiceFilter(e.target.value)}>
           <option value="">All services</option>
-          <option value="nginx">nginx</option>
-          <option value="api">api</option>
-          <option value="db">db</option>
+          {services.map((s) => <option key={s} value={s}>{s}</option>)}
         </select>
         <select value={severityFilter} onChange={(e) => setSeverityFilter(e.target.value)}>
           <option value="">All levels</option>
-          <option value="info">info</option>
-          <option value="warn">warn</option>
-          <option value="error">error</option>
+          {severities.map((s) => <option key={s} value={s}>{s}</option>)}
         </select>
       </div>
       {loading && logs.length === 0 ? (

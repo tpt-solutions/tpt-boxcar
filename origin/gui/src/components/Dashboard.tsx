@@ -156,6 +156,14 @@ const Dashboard = forwardRef<DashboardHandle>(function Dashboard(_props, ref) {
                 >
                   {actionPending === svc.id ? "Working..." : "Stop"}
                 </button>
+                <button
+                  onClick={() => doRestart(svc.id)}
+                  disabled={actionPending === svc.id}
+                  style={{ marginLeft: "0.5rem" }}
+                  title="Restart (R)"
+                >
+                  {actionPending === svc.id ? "Working..." : "Restart"}
+                </button>
               </td>
             </tr>
           ))}

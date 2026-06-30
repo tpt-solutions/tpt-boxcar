@@ -7,7 +7,6 @@ import (
 	"log"
 	"net/http"
 	"os"
-	"strings"
 
 	"github.com/tpt-cloud-native/frontier/control-plane/internal/store"
 )
@@ -318,19 +317,14 @@ func writeJSON(w http.ResponseWriter, status int, v interface{}) {
 	}
 }
 
+const maxBodyBytes = 1 << 20 // 1 MiB — sufficient for any config object
+
 func decodeBody(r *http.Request, v interface{}) error {
+	r.Body = http.MaxBytesReader(nil, r.Body, maxBodyBytes)
 	dec := json.NewDecoder(r.Body)
 	dec.DisallowUnknownFields()
 	if err := dec.Decode(v); err != nil {
 		return fmt.Errorf("invalid request body: %w", err)
 	}
 	return nil
-}
-
-// ExtractNameFromPath is a helper for extracting the {name} path value
-// from older Go versions that don't support PathValue.
-func ExtractNameFromPath(path, prefix string) string {
-	trimmed := strings.TrimPrefix(path, prefix)
-	trimmed = strings.TrimPrefix(trimmed, "/")
-	return trimmed
 }
