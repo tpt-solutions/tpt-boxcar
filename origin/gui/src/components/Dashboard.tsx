@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useImperativeHandle, forwardRef } from "react";
 import {
   listServices,
   startService,
@@ -6,7 +6,13 @@ import {
   type Service,
 } from "../api/tauriApi";
 
-export default function Dashboard() {
+export interface DashboardHandle {
+  startFirst: () => void;
+  stopFirst: () => void;
+  restartFirst: () => void;
+}
+
+const Dashboard = forwardRef<DashboardHandle>(function Dashboard(_props, ref) {
   const [services, setServices] = useState<Service[]>([]);
   const [loading, setLoading] = useState(true);
   const [actionPending, setActionPending] = useState<string | null>(null);
@@ -28,19 +34,63 @@ export default function Dashboard() {
     return () => clearInterval(id);
   }, [fetchServices]);
 
-  const handleToggle = async (svc: Service) => {
-    setActionPending(svc.name);
+  const doStart = useCallback(async (name: string) => {
+    setActionPending(name);
     try {
-      if (svc.status === "running") {
-        await stopService(svc.name);
-      } else {
-        await startService(svc.name);
-      }
+      await startService(name);
       await fetchServices();
     } catch (err) {
-      console.error(`Failed to toggle ${svc.name}:`, err);
+      console.error(`Failed to start ${name}:`, err);
     } finally {
       setActionPending(null);
+    }
+  }, [fetchServices]);
+
+  const doStop = useCallback(async (name: string) => {
+    setActionPending(name);
+    try {
+      await stopService(name);
+      await fetchServices();
+    } catch (err) {
+      console.error(`Failed to stop ${name}:`, err);
+    } finally {
+      setActionPending(null);
+    }
+  }, [fetchServices]);
+
+  const doRestart = useCallback(async (name: string) => {
+    setActionPending(name);
+    try {
+      await stopService(name);
+      await startService(name);
+      await fetchServices();
+    } catch (err) {
+      console.error(`Failed to restart ${name}:`, err);
+    } finally {
+      setActionPending(null);
+    }
+  }, [fetchServices]);
+
+  useImperativeHandle(ref, () => ({
+    startFirst: () => {
+      const first = services[0];
+      if (first) doStart(first.name);
+    },
+    stopFirst: () => {
+      const first = services[0];
+      if (first) doStop(first.name);
+    },
+    restartFirst: () => {
+      const first = services[0];
+      if (first) doRestart(first.name);
+    },
+  }), [services, doStart, doStop, doRestart]);
+
+  const handleToggle = async (svc: Service) => {
+    if (svc.status === "running") {
+      await doStop(svc.name);
+    } else {
+      await doStart(svc.name);
     }
   };
 
@@ -99,4 +149,6 @@ export default function Dashboard() {
       </div>
     </div>
   );
-}
+});
+
+export default Dashboard;

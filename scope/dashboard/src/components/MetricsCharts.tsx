@@ -1,6 +1,7 @@
 import { useState, useEffect } from "react";
 import { getMetrics } from "../api/client";
 import type { MetricSeries } from "../api/types";
+import { useRefreshInterval } from "./RefreshPicker";
 
 function MiniLineChart({ series, color }: { series: MetricSeries; color: string }) {
   if (!series.points.length) return <div style={{ height: 150, background: "#1a1a2e", borderRadius: 4 }} />;
@@ -23,6 +24,7 @@ export default function MetricsCharts() {
   const [metrics, setMetrics] = useState<MetricSeries[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const { interval } = useRefreshInterval();
 
   const fetchData = async () => {
     try {
@@ -37,9 +39,10 @@ export default function MetricsCharts() {
 
   useEffect(() => {
     fetchData();
-    const id = setInterval(fetchData, 5_000);
+    if (interval === 0) return;
+    const id = setInterval(fetchData, interval * 1000);
     return () => clearInterval(id);
-  }, []);
+  }, [interval]);
 
   if (loading) return <div style={{ padding: "2rem", color: "#666" }}>Loading...</div>;
   if (error) return <div style={{ padding: "2rem", color: "#f85149" }}>Error: {error}</div>;
