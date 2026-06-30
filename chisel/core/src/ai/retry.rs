@@ -1,5 +1,6 @@
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::Duration;
 
+use rand::Rng;
 use reqwest::header::HeaderMap;
 
 use super::error::LlmError;
@@ -65,15 +66,7 @@ impl RetryPolicy {
         let base_ms = self.base_delay.as_millis() as u64;
         let exp = 1u64 << attempt.min(10);
         let ceiling = base_ms.saturating_mul(exp).min(60_000);
-        let jitter = pseudo_random() * (ceiling as f64 * 0.25);
-        Duration::from_millis(ceiling + jitter as u64)
+        let jitter = rand::thread_rng().gen_range(0..ceiling.max(1));
+        Duration::from_millis(ceiling + jitter)
     }
-}
-
-fn pseudo_random() -> f64 {
-    let nanos = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap_or_default()
-        .subsec_nanos();
-    (nanos % 1_000_000) as f64 / 1_000_000.0
 }
