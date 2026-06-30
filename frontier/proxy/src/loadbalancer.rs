@@ -1,10 +1,12 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
+use std::hash::{Hash, Hasher};
 use std::net::SocketAddr;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
-use parking_lot::Mutex;
+use ahash::AHasher;
+use parking_lot::{Mutex, RwLock};
+use rand::Rng;
 use serde::{Deserialize, Serialize};
-use sha2::{Digest, Sha256};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct BackendEndpoint {
@@ -30,6 +32,7 @@ pub enum LoadBalancerStrategy {
 pub struct RoundRobinBalancer {
     endpoints: Vec<BackendEndpoint>,
     index: AtomicUsize,
+    unhealthy: RwLock<HashSet<String>>,
 }
 
 impl RoundRobinBalancer {
@@ -37,6 +40,7 @@ impl RoundRobinBalancer {
         Self {
             endpoints,
             index: AtomicUsize::new(0),
+            unhealthy: RwLock::new(HashSet::new()),
         }
     }
 }
@@ -46,16 +50,36 @@ impl LoadBalancer for RoundRobinBalancer {
         if self.endpoints.is_empty() {
             return None;
         }
-        let index = self.index.fetch_add(1, Ordering::Relaxed) % self.endpoints.len();
-        Some(self.endpoints[index].clone())
+
+        let unhealthy = self.unhealthy.read();
+        let healthy: Vec<&BackendEndpoint> = self.endpoints.iter()
+            .filter(|ep| !unhealthy.contains(&ep.addr.to_string()))
+            .collect();
+
+        // Fall back to all endpoints if every upstream is unhealthy (best-effort)
+        if healthy.is_empty() {
+            let idx = self.index.fetch_add(1, Ordering::Relaxed) % self.endpoints.len();
+            return Some(self.endpoints[idx].clone());
+        }
+
+        let idx = self.index.fetch_add(1, Ordering::Relaxed) % healthy.len();
+        Some((*healthy[idx]).clone())
     }
 
-    fn mark_healthy(&self, _endpoint: &BackendEndpoint) {}
+    fn mark_healthy(&self, endpoint: &BackendEndpoint) {
+        self.unhealthy.write().remove(&endpoint.addr.to_string());
+    }
 
-    fn mark_unhealthy(&self, _endpoint: &BackendEndpoint) {}
+    fn mark_unhealthy(&self, endpoint: &BackendEndpoint) {
+        self.unhealthy.write().insert(endpoint.addr.to_string());
+    }
 
     fn healthy_endpoints(&self) -> Vec<BackendEndpoint> {
-        self.endpoints.clone()
+        let unhealthy = self.unhealthy.read();
+        self.endpoints.iter()
+            .filter(|ep| !unhealthy.contains(&ep.addr.to_string()))
+            .cloned()
+            .collect()
     }
 }
 
@@ -110,6 +134,7 @@ pub struct ConsistentHashBalancer {
     endpoints: Vec<BackendEndpoint>,
     ring: Mutex<Vec<(u64, usize)>>,
     virtual_nodes: usize,
+    unhealthy: RwLock<HashSet<String>>,
 }
 
 impl ConsistentHashBalancer {
@@ -118,16 +143,21 @@ impl ConsistentHashBalancer {
             endpoints,
             ring: Mutex::new(Vec::new()),
             virtual_nodes,
+            unhealthy: RwLock::new(HashSet::new()),
         };
         balancer.rebuild_ring();
         balancer
     }
 
     fn rebuild_ring(&self) {
+        let unhealthy = self.unhealthy.read();
         let mut ring = self.ring.lock();
         ring.clear();
 
         for (idx, ep) in self.endpoints.iter().enumerate() {
+            if unhealthy.contains(&ep.addr.to_string()) {
+                continue;
+            }
             for i in 0..self.virtual_nodes {
                 let key = format!("{}:{}", ep.addr, i);
                 let hash = Self::hash(&key);
@@ -135,14 +165,24 @@ impl ConsistentHashBalancer {
             }
         }
 
+        // If all are unhealthy, fall back to including everyone (best-effort)
+        if ring.is_empty() {
+            for (idx, ep) in self.endpoints.iter().enumerate() {
+                for i in 0..self.virtual_nodes {
+                    let key = format!("{}:{}", ep.addr, i);
+                    let hash = Self::hash(&key);
+                    ring.push((hash, idx));
+                }
+            }
+        }
+
         ring.sort_by_key(|(hash, _)| *hash);
     }
 
     fn hash(key: &str) -> u64 {
-        let mut hasher = Sha256::new();
-        hasher.update(key.as_bytes());
-        let result = hasher.finalize();
-        u64::from_be_bytes(result[..8].try_into().unwrap())
+        let mut hasher = AHasher::default();
+        key.as_bytes().hash(&mut hasher);
+        hasher.finish()
     }
 
     fn get_node(&self, key: &str) -> Option<BackendEndpoint> {
@@ -164,25 +204,29 @@ impl ConsistentHashBalancer {
 
 impl LoadBalancer for ConsistentHashBalancer {
     fn next_endpoint(&self) -> Option<BackendEndpoint> {
-        let key = format!("req-{}", rand_simple());
+        let key = format!("req-{}", rand::thread_rng().gen::<u64>());
         self.get_node(&key)
     }
 
-    fn mark_healthy(&self, _endpoint: &BackendEndpoint) {}
+    fn mark_healthy(&self, endpoint: &BackendEndpoint) {
+        {
+            self.unhealthy.write().remove(&endpoint.addr.to_string());
+        }
+        self.rebuild_ring();
+    }
 
-    fn mark_unhealthy(&self, _endpoint: &BackendEndpoint) {
+    fn mark_unhealthy(&self, endpoint: &BackendEndpoint) {
+        {
+            self.unhealthy.write().insert(endpoint.addr.to_string());
+        }
         self.rebuild_ring();
     }
 
     fn healthy_endpoints(&self) -> Vec<BackendEndpoint> {
-        self.endpoints.clone()
+        let unhealthy = self.unhealthy.read();
+        self.endpoints.iter()
+            .filter(|ep| !unhealthy.contains(&ep.addr.to_string()))
+            .cloned()
+            .collect()
     }
-}
-
-fn rand_simple() -> u64 {
-    use std::time::{SystemTime, UNIX_EPOCH};
-    let now = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap();
-    now.as_nanos() as u64
 }

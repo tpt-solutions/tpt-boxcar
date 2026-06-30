@@ -18,6 +18,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "5a15f179cd60c4584b8a8c596927aadc462e27f2ca70c04e0071964a73ba7a75"
 dependencies = [
  "cfg-if",
+ "getrandom 0.3.4",
  "once_cell",
  "version_check",
  "zerocopy",
@@ -3136,6 +3137,7 @@ dependencies = [
 name = "tpt-frontier-proxy"
 version = "0.1.0"
 dependencies = [
+ "ahash",
  "anyhow",
  "base64 0.22.1",
  "bytes",
@@ -3152,7 +3154,6 @@ dependencies = [
  "rustls-pemfile 2.2.0",
  "serde",
  "serde_json",
- "sha2",
  "thiserror 1.0.69",
  "tokio",
  "tokio-rustls",
