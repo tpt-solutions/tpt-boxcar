@@ -1,14 +1,17 @@
-use std::collections::HashMap;
-
-use async_trait::async_trait;
-use reqwest::Client;
+use anyhow::Result;
+use http_body_util::{BodyExt, Full};
+use hyper::{body::Bytes, Request};
+use hyper_rustls::HttpsConnector;
+use hyper_util::client::legacy::Client;
+use hyper_util::rt::TokioExecutor;
+use serde_json::json;
 use tracing::info;
 
 use super::error::LlmError;
 use super::traits::LlmProvider;
 
+#[derive(Debug, Clone)]
 pub struct OllamaProvider {
-    client: Client,
     base_url: String,
     model: String,
 }
@@ -16,39 +19,48 @@ pub struct OllamaProvider {
 impl OllamaProvider {
     pub fn new(base_url: &str, model: &str) -> Self {
         Self {
-            client: Client::new(),
             base_url: base_url.to_string(),
             model: model.to_string(),
         }
     }
 }
 
-#[async_trait]
 impl LlmProvider for OllamaProvider {
     async fn complete(&self, prompt: &str) -> Result<String, LlmError> {
         info!("ollama request to model: {}", self.model);
 
-        let mut body = HashMap::new();
-        body.insert("model", self.model.clone());
-        body.insert("prompt", prompt.to_string());
-        body.insert("stream", "true".to_string());
+        let body = json!({
+            "model": self.model,
+            "prompt": prompt,
+            "stream": true
+        });
 
         let url = format!("{}/api/generate", self.base_url);
 
-        let resp = self
-            .client
-            .post(&url)
-            .json(&body)
-            .send()
-            .await
-            .map_err(|e| LlmError::Network(format!("failed to send request: {e}")))?;
+        let https = HttpsConnector::with_native_roots();
+        let client: Client<_, Full<Bytes>> = Client::builder(TokioExecutor::new())
+            .build(https);
+
+        let req = Request::builder()
+            .method("POST")
+            .uri(&url)
+            .header("content-type", "application/json")
+            .body(Full::new(Bytes::from(body.to_string())))
+            .map_err(|e| LlmError::Network(format!("failed to build request: {e}")))?;
+
+        let resp = client.request(req).await.map_err(|e| {
+            LlmError::Network(format!("failed to fetch response: {e}"))
+        })?;
 
         let status = resp.status();
         if !status.is_success() {
             let text = resp
-                .text()
+                .into_body()
+                .collect()
                 .await
-                .unwrap_or_else(|_| "unknown error".into());
+                .map_err(|e| LlmError::Network(format!("failed to read error body: {e}")))?
+                .to_bytes();
+            let text = String::from_utf8_lossy(&text);
             return Err(LlmError::Unavailable(format!(
                 "ollama returned {status}: {text}"
             )));
@@ -58,12 +70,11 @@ impl LlmProvider for OllamaProvider {
         let mut buffer = String::new();
 
         let mut resp = resp;
-        while let Some(chunk) = resp
-            .chunk()
-            .await
-            .map_err(|e| LlmError::Network(format!("stream read error: {e}")))?
-        {
-            buffer.push_str(&String::from_utf8_lossy(&chunk));
+        while let Some(next) = resp.frame().await {
+            let frame = next.map_err(|e| LlmError::Network(format!("stream read error: {e}")))?;
+            if let Some(data) = frame.into_data().ok() {
+                buffer.push_str(&String::from_utf8_lossy(&data));
+            }
 
             while let Some(pos) = buffer.find('\n') {
                 let line = buffer[..pos].trim().to_string();

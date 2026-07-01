@@ -10,32 +10,6 @@ import (
 )
 
 var (
-	tracesIngested = prometheus.NewCounter(prometheus.CounterOpts{
-		Name: "scope_ingest_traces_total",
-		Help: "Total number of trace spans received via OTLP",
-	})
-	metricsIngested = prometheus.NewCounter(prometheus.CounterOpts{
-		Name: "scope_ingest_metrics_total",
-		Help: "Total number of metric data points received via OTLP",
-	})
-	logsIngested = prometheus.NewCounter(prometheus.CounterOpts{
-		Name: "scope_ingest_logs_total",
-		Help: "Total number of log records received via OTLP",
-	})
-	traceBufferDepth = prometheus.NewGauge(prometheus.GaugeOpts{
-		Name: "scope_ingest_trace_buffer_depth",
-		Help: "Current number of trace records in the ring buffer",
-	})
-	metricBufferDepth = prometheus.NewGauge(prometheus.GaugeOpts{
-		Name: "scope_ingest_metric_buffer_depth",
-		Help: "Current number of metric records in the ring buffer",
-	})
-	logBufferDepth = prometheus.NewGauge(prometheus.GaugeOpts{
-		Name: "scope_ingest_log_buffer_depth",
-		Help: "Current number of log records in the ring buffer",
-	})
-
-	// HTTP-layer metrics (distinct from ingestion-count counters)
 	httpRequestsTotal = prometheus.NewCounterVec(
 		prometheus.CounterOpts{
 			Name: "tpt_http_requests_total",
@@ -60,11 +34,7 @@ var (
 )
 
 func init() {
-	prometheus.MustRegister(
-		tracesIngested, metricsIngested, logsIngested,
-		traceBufferDepth, metricBufferDepth, logBufferDepth,
-		httpRequestsTotal, httpRequestDuration, httpInflightRequests,
-	)
+	prometheus.MustRegister(httpRequestsTotal, httpRequestDuration, httpInflightRequests)
 }
 
 // MetricsHandler serves the /metrics endpoint.
@@ -80,11 +50,13 @@ func instrumentMiddleware(next http.Handler) http.Handler {
 
 		start := time.Now()
 
+		// Wrap response writer to capture status code.
 		lrw := &loggingResponseWriter{ResponseWriter: w, statusCode: http.StatusOK}
 		next.ServeHTTP(lrw, r)
 
 		duration := time.Since(start).Seconds()
 		status := strconv.Itoa(lrw.statusCode)
+		// Use URL pattern path — r.URL.Path is sufficient for ServeMux routing.
 		httpRequestsTotal.WithLabelValues(r.Method, r.URL.Path, status).Inc()
 		httpRequestDuration.WithLabelValues(r.Method, r.URL.Path).Observe(duration)
 	})

@@ -3,13 +3,12 @@ use std::sync::atomic::{AtomicU8, Ordering};
 use std::sync::Arc;
 
 use anyhow::{bail, Context, Result};
-use async_trait::async_trait;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
 use tokio::sync::Mutex;
 use tracing::{debug, info, instrument, warn};
 
-use super::wire::{DriverKind, WireDriver, WireTransaction};
+use super::wire::DriverKind;
 use super::QueryRow;
 
 const CLIENT_PROTOCOL_41: u32 = 1 << 9;
@@ -287,44 +286,17 @@ impl MysqlWireDriver {
     }
 }
 
-#[async_trait]
-impl WireDriver for MysqlWireDriver {
-    fn kind(&self) -> DriverKind {
+impl MysqlWireDriver {
+    pub fn kind(&self) -> DriverKind {
         DriverKind::Mysql
     }
 
-    fn is_connected(&self) -> bool {
+    pub fn is_connected(&self) -> bool {
         self.connected
     }
 
-    async fn connect(
-        &mut self,
-        host: &str,
-        port: u16,
-        database: &str,
-        username: &str,
-        password: &str,
-    ) -> Result<()> {
-        let addr = format!("{}:{}", host, port)
-            .to_socket_addrs()?
-            .next()
-            .context("failed to resolve host")?;
-
-        let mut stream = TcpStream::connect(addr)
-            .await
-            .context("failed to connect to mysql")?;
-
-        Self::handshake(&mut stream, username, password, database).await?;
-
-        *self.stream.lock().await = Some(stream);
-        self.sequence_id.store(0, Ordering::SeqCst);
-        self.connected = true;
-        info!(host, port, database, "mysql wire connected");
-        Ok(())
-    }
-
     #[instrument(skip(self, params), fields(sql = %&sql[..80.min(sql.len())]))]
-    async fn query(&self, sql: &str, params: &[serde_json::Value]) -> Result<QueryRow> {
+    pub async fn query(&self, sql: &str, params: &[serde_json::Value]) -> Result<QueryRow> {
         let seq = self.next_seq();
 
         if !params.is_empty() {
@@ -427,7 +399,7 @@ impl WireDriver for MysqlWireDriver {
     }
 
     #[instrument(skip(self, _params), fields(sql = %&sql[..80.min(sql.len())]))]
-    async fn execute(&self, sql: &str, _params: &[serde_json::Value]) -> Result<u64> {
+    pub async fn execute(&self, sql: &str, _params: &[serde_json::Value]) -> Result<u64> {
         let seq = self.next_seq();
         let mut guard = self.stream.lock().await;
         let stream = guard.as_mut().context("not connected")?;
@@ -440,14 +412,33 @@ impl WireDriver for MysqlWireDriver {
         Ok(0)
     }
 
-    async fn begin_transaction(&self) -> Result<Box<dyn WireTransaction>> {
-        self.execute("BEGIN", &[]).await?;
-        Ok(Box::new(MysqlWireTransaction {
-            driver: self.clone(),
-        }))
+    pub async fn connect(
+        &mut self,
+        host: &str,
+        port: u16,
+        database: &str,
+        username: &str,
+        password: &str,
+    ) -> Result<()> {
+        let addr = format!("{}:{}", host, port)
+            .to_socket_addrs()?
+            .next()
+            .context("failed to resolve host")?;
+
+        let mut stream = TcpStream::connect(addr)
+            .await
+            .context("failed to connect to mysql")?;
+
+        Self::handshake(&mut stream, username, password, database).await?;
+
+        *self.stream.lock().await = Some(stream);
+        self.sequence_id.store(0, Ordering::SeqCst);
+        self.connected = true;
+        info!(host, port, database, "mysql wire connected");
+        Ok(())
     }
 
-    async fn ping(&self) -> Result<()> {
+    pub async fn ping(&self) -> Result<()> {
         if !self.connected {
             warn!("attempted ping on disconnected MySQL connection");
             bail!("not connected");
@@ -479,31 +470,6 @@ impl Clone for MysqlWireDriver {
             connected: self.connected,
             sequence_id: AtomicU8::new(self.sequence_id.load(Ordering::SeqCst)),
         }
-    }
-}
-
-pub struct MysqlWireTransaction {
-    driver: MysqlWireDriver,
-}
-
-#[async_trait]
-impl WireTransaction for MysqlWireTransaction {
-    async fn query(&mut self, sql: &str, params: &[serde_json::Value]) -> Result<QueryRow> {
-        self.driver.query(sql, params).await
-    }
-
-    async fn execute(&mut self, sql: &str, params: &[serde_json::Value]) -> Result<u64> {
-        self.driver.execute(sql, params).await
-    }
-
-    async fn commit(self: Box<Self>) -> Result<()> {
-        self.driver.execute("COMMIT", &[]).await?;
-        Ok(())
-    }
-
-    async fn rollback(self: Box<Self>) -> Result<()> {
-        self.driver.execute("ROLLBACK", &[]).await?;
-        Ok(())
     }
 }
 

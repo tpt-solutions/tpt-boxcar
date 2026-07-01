@@ -10,33 +10,33 @@ pub struct WitParams {
 
 /// WIT binding facade that delegates to any WireDriver implementation.
 pub struct TetherWit {
-    inner: Box<dyn WireDriver>,
+    inner: WireDriver,
 }
 
 impl TetherWit {
     /// Create a new TetherWit backed by the given driver.
-    pub fn new(driver: Box<dyn WireDriver>) -> Self {
+    pub fn new(driver: WireDriver) -> Self {
         Self { inner: driver }
     }
 
     /// Create a TetherWit with a PostgresWireDriver (backward compatible).
     pub fn new_postgres() -> Self {
         Self {
-            inner: Box::new(crate::drivers::PostgresWireDriver::new()),
+            inner: WireDriver::Postgres(crate::drivers::PostgresWireDriver::new()),
         }
     }
 
     /// Create a TetherWit with a MysqlWireDriver.
     pub fn new_mysql() -> Self {
         Self {
-            inner: Box::new(crate::drivers::MysqlWireDriver::new()),
+            inner: WireDriver::Mysql(crate::drivers::MysqlWireDriver::new()),
         }
     }
 
     /// Create a TetherWit with a RedisWireDriver.
     pub fn new_redis() -> Self {
         Self {
-            inner: Box::new(crate::drivers::RedisWireDriver::new()),
+            inner: WireDriver::Redis(crate::drivers::RedisWireDriver::new()),
         }
     }
 
@@ -82,7 +82,7 @@ impl TetherWit {
         self.inner.execute(sql, &params.values).await
     }
 
-    pub async fn begin_transaction(&self) -> Result<Box<dyn crate::drivers::WireTransaction>> {
+    pub async fn begin_transaction(&self) -> Result<crate::drivers::WireTransaction> {
         self.inner.begin_transaction().await
     }
 

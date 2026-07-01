@@ -13,7 +13,7 @@ impl ComponentizeP2 {
         }
     }
 
-    pub fn with_driver(driver: Box<dyn crate::drivers::WireDriver>) -> Self {
+    pub fn with_driver(driver: crate::drivers::WireDriver) -> Self {
         Self {
             wit: TetherWit::new(driver),
         }

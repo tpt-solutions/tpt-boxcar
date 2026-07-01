@@ -1,7 +1,7 @@
 use std::time::Duration;
 
+use http::HeaderMap;
 use rand::Rng;
-use reqwest::header::HeaderMap;
 
 use super::error::LlmError;
 

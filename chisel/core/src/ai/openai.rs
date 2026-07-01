@@ -1,13 +1,18 @@
-use async_trait::async_trait;
-use reqwest::Client;
+use anyhow::Result;
+use http_body_util::{BodyExt, Full};
+use hyper::{body::Bytes, Request};
+use hyper_rustls::HttpsConnector;
+use hyper_util::client::legacy::Client;
+use hyper_util::rt::TokioExecutor;
+use serde_json::json;
 use tracing::info;
 
 use super::error::LlmError;
 use super::retry::extract_retry_after;
 use super::traits::LlmProvider;
 
+#[derive(Debug, Clone)]
 pub struct OpenAiProvider {
-    client: Client,
     base_url: String,
     api_key: String,
     model: String,
@@ -16,7 +21,6 @@ pub struct OpenAiProvider {
 impl OpenAiProvider {
     pub fn new(base_url: &str, api_key: &str, model: &str) -> Self {
         Self {
-            client: Client::new(),
             base_url: base_url.trim_end_matches('/').to_string(),
             api_key: api_key.to_string(),
             model: model.to_string(),
@@ -24,12 +28,11 @@ impl OpenAiProvider {
     }
 }
 
-#[async_trait]
 impl LlmProvider for OpenAiProvider {
     async fn complete(&self, prompt: &str) -> Result<String, LlmError> {
         info!("openai api request to model: {}", self.model);
 
-        let body = serde_json::json!({
+        let body = json!({
             "model": self.model,
             "stream": true,
             "messages": [{
@@ -40,15 +43,21 @@ impl LlmProvider for OpenAiProvider {
 
         let url = format!("{}/v1/chat/completions", self.base_url);
 
-        let resp = self
-            .client
-            .post(&url)
+        let https = HttpsConnector::with_native_roots();
+        let client: Client<_, Full<Bytes>> = Client::builder(TokioExecutor::new())
+            .build(https);
+
+        let req = Request::builder()
+            .method("POST")
+            .uri(&url)
             .header("Authorization", format!("Bearer {}", self.api_key))
             .header("Content-Type", "application/json")
-            .json(&body)
-            .send()
-            .await
-            .map_err(|e| LlmError::Network(format!("failed to send request: {e}")))?;
+            .body(Full::new(Bytes::from(body.to_string())))
+            .map_err(|e| LlmError::Network(format!("failed to build request: {e}")))?;
+
+        let resp = client.request(req).await.map_err(|e| {
+            LlmError::Network(format!("failed to fetch response: {e}"))
+        })?;
 
         let status = resp.status();
         if !status.is_success() {
@@ -58,16 +67,15 @@ impl LlmProvider for OpenAiProvider {
                 return Err(LlmError::RateLimit { retry_after });
             }
             if status.as_u16() == 401 {
-                let text = resp
-                    .text()
-                    .await
-                    .unwrap_or_else(|_| "unauthorized".into());
-                return Err(LlmError::AuthError(text));
+                return Err(LlmError::AuthError("unauthorized".into()));
             }
             let text = resp
-                .text()
+                .into_body()
+                .collect()
                 .await
-                .unwrap_or_else(|_| "unknown error".into());
+                .map_err(|e| LlmError::Network(format!("failed to read error body: {e}")))?
+                .to_bytes();
+            let text = String::from_utf8_lossy(&text);
             return Err(LlmError::Unavailable(format!(
                 "openai returned {status}: {text}"
             )));
@@ -77,12 +85,11 @@ impl LlmProvider for OpenAiProvider {
         let mut buffer = String::new();
 
         let mut resp = resp;
-        while let Some(chunk) = resp
-            .chunk()
-            .await
-            .map_err(|e| LlmError::Network(format!("stream read error: {e}")))?
-        {
-            buffer.push_str(&String::from_utf8_lossy(&chunk));
+        while let Some(next) = resp.frame().await {
+            let frame = next.map_err(|e| LlmError::Network(format!("stream read error: {e}")))?;
+            if let Some(data) = frame.into_data().ok() {
+                buffer.push_str(&String::from_utf8_lossy(&data));
+            }
 
             while let Some(pos) = buffer.find('\n') {
                 let line = buffer[..pos].trim().to_string();

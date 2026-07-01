@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"strconv"
 	"syscall"
 	"time"
 
@@ -20,6 +21,7 @@ import (
 
 	"github.com/tpt-cloud-native/scope/backend/internal/buffer"
 	"github.com/tpt-cloud-native/scope/backend/internal/clickhouse"
+	"github.com/tpt-cloud-native/scope/backend/internal/ratelimit"
 	"github.com/tpt-cloud-native/scope/backend/internal/schema"
 )
 
@@ -129,9 +131,18 @@ func main() {
 		fmt.Fprintf(w, `{"status":"healthy"}`)
 	})
 
+	// Rate limiting
+	ingestRateLimit := 1000
+	if env := os.Getenv("SCOPE_INGEST_RATE_LIMIT"); env != "" {
+		if v, err := strconv.Atoi(env); err == nil && v > 0 {
+			ingestRateLimit = v
+		}
+	}
+	rl := ratelimit.New(ingestRateLimit, time.Minute)
+
 	httpSrv := &http.Server{
 		Addr:    fmt.Sprintf(":%d", *httpPort),
-		Handler: httpMux,
+		Handler: rl.Middleware(instrumentMiddleware(httpMux)),
 	}
 	go func() {
 		log.Printf("OTLP HTTP receiver on :%d", *httpPort)

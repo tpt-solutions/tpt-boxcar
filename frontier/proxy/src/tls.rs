@@ -5,10 +5,10 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use anyhow::{Context, Result};
-use parking_lot::RwLock;
 use rustls::pki_types::{CertificateDer, PrivateKeyDer};
 use rustls::ServerConfig;
 use tokio_rustls::TlsAcceptor as RustlsTlsAcceptor;
+use tokio::sync::RwLock;
 use tracing::{debug, info};
 
 #[derive(Debug, Clone)]
@@ -71,23 +71,23 @@ impl TlsAcceptor {
         Ok(())
     }
 
-    pub fn add_sni_cert(&self, sni_name: String, cert_pair: TlsCertPair) -> Result<()> {
-        let mut certs = self.cert_paths.write();
+    pub async fn add_sni_cert(&self, sni_name: String, cert_pair: TlsCertPair) -> Result<()> {
+        let mut certs = self.cert_paths.write().await;
         certs.insert(sni_name.clone(), cert_pair);
         debug!("added SNI cert for: {}", sni_name);
         Ok(())
     }
 
-    pub fn remove_sni_cert(&self, sni_name: &str) -> Result<()> {
-        let mut certs = self.cert_paths.write();
+    pub async fn remove_sni_cert(&self, sni_name: &str) -> Result<()> {
+        let mut certs = self.cert_paths.write().await;
         certs.remove(sni_name)
             .context(format!("SNI cert not found: {}", sni_name))?;
         debug!("removed SNI cert for: {}", sni_name);
         Ok(())
     }
 
-    pub fn list_sni_certs(&self) -> Vec<String> {
-        let certs = self.cert_paths.read();
+    pub async fn list_sni_certs(&self) -> Vec<String> {
+        let certs = self.cert_paths.read().await;
         certs.keys().cloned().collect()
     }
 }

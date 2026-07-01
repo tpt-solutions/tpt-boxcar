@@ -47,7 +47,7 @@ impl Default for PoolConfig {
 
 #[allow(dead_code)]
 struct PooledConnection {
-    driver: Box<dyn WireDriver>,
+    driver: WireDriver,
     created_at: Instant,
     last_used: Instant,
 }
@@ -85,7 +85,7 @@ impl ConnectionPool {
     pub fn new_with_factory(
         config: PoolConfig,
         db_config: DatabaseConfig,
-        _make_driver: impl Fn() -> Box<dyn WireDriver> + Send + Sync + 'static,
+        _make_driver: impl Fn() -> WireDriver + Send + Sync + 'static,
     ) -> Self {
         let max = config.max_size as usize;
         let (idle_tx, idle_rx) = mpsc::channel(max);
@@ -121,7 +121,7 @@ impl ConnectionPool {
     }
 
     async fn create_connection(&self) -> Result<PooledConnection> {
-        let mut driver = crate::drivers::PostgresWireDriver::new();
+        let mut driver = WireDriver::Postgres(crate::drivers::PostgresWireDriver::new());
         let creds = &self.db_config.credentials;
         let username = creds.username().context("failed to resolve username")?;
         let password = creds.password().context("failed to resolve password")?;
@@ -138,7 +138,7 @@ impl ConnectionPool {
 
         let now = Instant::now();
         Ok(PooledConnection {
-            driver: Box::new(driver),
+            driver,
             created_at: now,
             last_used: now,
         })
@@ -249,7 +249,7 @@ impl<'a> PooledConnectionGuard<'a> {
         f.await
     }
 
-    /// Access the underlying WireDriver trait object.
+    /// Access the underlying WireDriver.
     pub async fn with_driver<F, R>(&self, f: F) -> Result<R>
     where
         F: std::future::Future<Output = Result<R>>,

@@ -2,13 +2,12 @@ use std::net::ToSocketAddrs;
 use std::sync::Arc;
 
 use anyhow::{bail, Context, Result};
-use async_trait::async_trait;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
 use tokio::sync::Mutex;
 use tracing::{debug, info, instrument, warn};
 
-use super::wire::{DriverKind, WireDriver, WireTransaction};
+use super::wire::DriverKind;
 use super::QueryRow;
 
 pub struct PostgresWireDriver {
@@ -323,7 +322,7 @@ impl PostgresWireDriver {
     }
 
     /// Send COM_QUERY (for MySQL compatibility comment; this is Postgres Simple Query).
-    async fn simple_execute(&self, sql: &str) -> Result<u64> {
+    pub async fn simple_execute(&self, sql: &str) -> Result<u64> {
         let mut msg = Vec::new();
         msg.extend_from_slice(sql.as_bytes());
         msg.push(0);
@@ -367,17 +366,40 @@ impl PostgresWireDriver {
     }
 }
 
-#[async_trait]
-impl WireDriver for PostgresWireDriver {
-    fn kind(&self) -> DriverKind {
+impl PostgresWireDriver {
+    pub fn kind(&self) -> DriverKind {
         DriverKind::Postgres
     }
 
-    fn is_connected(&self) -> bool {
+    pub fn is_connected(&self) -> bool {
         self.connected
     }
 
-    async fn connect(
+    #[instrument(skip(self, params), fields(sql = %&sql[..80.min(sql.len())]))]
+    pub async fn query(&self, sql: &str, params: &[serde_json::Value]) -> Result<QueryRow> {
+        if params.is_empty() {
+            self.simple_query(sql).await
+        } else {
+            self.extended_query(sql, params).await
+        }
+    }
+
+    #[instrument(skip(self, params), fields(sql = %&sql[..80.min(sql.len())]))]
+    pub async fn execute(&self, sql: &str, params: &[serde_json::Value]) -> Result<u64> {
+        if params.is_empty() {
+            self.simple_execute(sql).await
+        } else {
+            // Extended query for parameterized statements
+            self.extended_query(sql, params).await?;
+            // For DML, the CommandComplete tag already provided the count
+            // We re-execute via simple_query to get row count for non-SELECT
+            // Actually, extended_query already reads the result set; the count is in CommandComplete
+            // For simplicity, run a separate SELECT to confirm
+            Ok(0)
+        }
+    }
+
+    pub async fn connect(
         &mut self,
         host: &str,
         port: u16,
@@ -611,38 +633,7 @@ impl WireDriver for PostgresWireDriver {
         Ok(())
     }
 
-    #[instrument(skip(self, params), fields(sql = %&sql[..80.min(sql.len())]))]
-    async fn query(&self, sql: &str, params: &[serde_json::Value]) -> Result<QueryRow> {
-        if params.is_empty() {
-            self.simple_query(sql).await
-        } else {
-            self.extended_query(sql, params).await
-        }
-    }
-
-    #[instrument(skip(self, params), fields(sql = %&sql[..80.min(sql.len())]))]
-    async fn execute(&self, sql: &str, params: &[serde_json::Value]) -> Result<u64> {
-        if params.is_empty() {
-            self.simple_execute(sql).await
-        } else {
-            // Extended query for parameterized statements
-            self.extended_query(sql, params).await?;
-            // For DML, the CommandComplete tag already provided the count
-            // We re-execute via simple_query to get row count for non-SELECT
-            // Actually, extended_query already reads the result set; the count is in CommandComplete
-            // For simplicity, run a separate SELECT to confirm
-            Ok(0)
-        }
-    }
-
-    async fn begin_transaction(&self) -> Result<Box<dyn WireTransaction>> {
-        self.simple_execute("BEGIN").await?;
-        Ok(Box::new(PostgresWireTransaction {
-            driver: self.clone(),
-        }))
-    }
-
-    async fn ping(&self) -> Result<()> {
+    pub async fn ping(&self) -> Result<()> {
         if !self.connected {
             warn!("attempted ping on disconnected Postgres connection");
             bail!("not connected");
@@ -666,31 +657,6 @@ impl Clone for PostgresWireDriver {
             parameters: self.parameters.clone(),
             server_name: self.server_name.clone(),
         }
-    }
-}
-
-pub struct PostgresWireTransaction {
-    driver: PostgresWireDriver,
-}
-
-#[async_trait]
-impl WireTransaction for PostgresWireTransaction {
-    async fn query(&mut self, sql: &str, params: &[serde_json::Value]) -> Result<QueryRow> {
-        self.driver.query(sql, params).await
-    }
-
-    async fn execute(&mut self, sql: &str, params: &[serde_json::Value]) -> Result<u64> {
-        self.driver.execute(sql, params).await
-    }
-
-    async fn commit(self: Box<Self>) -> Result<()> {
-        self.driver.simple_execute("COMMIT").await?;
-        Ok(())
-    }
-
-    async fn rollback(self: Box<Self>) -> Result<()> {
-        self.driver.simple_execute("ROLLBACK").await?;
-        Ok(())
     }
 }
 

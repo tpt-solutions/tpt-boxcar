@@ -7,7 +7,11 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"strconv"
 	"sync"
+	"time"
+
+	"github.com/tpt-cloud-native/tether/control-plane/internal/ratelimit"
 )
 
 // apiKeyMiddleware returns 401 if the X-API-Key header is missing or doesn't
@@ -129,11 +133,24 @@ func (cs *ConfigServer) handleHealth(w http.ResponseWriter, r *http.Request) {
 func main() {
 	cs := NewConfigServer()
 
-	http.HandleFunc("/api/v1/backends", apiKeyMiddleware(cs.handleBackends))
-	http.HandleFunc("/api/v1/routes", apiKeyMiddleware(cs.handleRoutes))
-	http.HandleFunc("/health", cs.handleHealth)
+	metrics := NewMetrics()
+
+	mux := http.NewServeMux()
+	mux.HandleFunc("/api/v1/backends", apiKeyMiddleware(cs.handleBackends))
+	mux.HandleFunc("/api/v1/routes", apiKeyMiddleware(cs.handleRoutes))
+	mux.HandleFunc("/health", cs.handleHealth)
+	mux.Handle("GET /metrics", metrics)
+
+	// Rate limiting
+	tetherRateLimit := 300
+	if env := os.Getenv("TETHER_RATE_LIMIT"); env != "" {
+		if v, err := strconv.Atoi(env); err == nil && v > 0 {
+			tetherRateLimit = v
+		}
+	}
+	rl := ratelimit.New(tetherRateLimit, time.Minute)
 
 	addr := ":8080"
 	fmt.Printf("TPT Tether Control Plane listening on %s\n", addr)
-	log.Fatal(http.ListenAndServe(addr, nil))
+	log.Fatal(http.ListenAndServe(addr, rl.Middleware(metrics.Instrument(mux))))
 }

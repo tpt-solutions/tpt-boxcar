@@ -9,8 +9,11 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"strconv"
 	"syscall"
 	"time"
+
+	"github.com/tpt-cloud-native/frontier/control-plane/internal/ratelimit"
 
 	"github.com/tpt-cloud-native/frontier/control-plane/internal/configpush"
 	consulsync "github.com/tpt-cloud-native/frontier/control-plane/internal/consul"
@@ -51,16 +54,29 @@ func main() {
 		}, cfgStore)
 	}
 
+	// Metrics
+	metrics := NewMetrics()
+
 	// Setup HTTP server with Go 1.22 ServeMux
 	mux := http.NewServeMux()
 	restHandler.RegisterRoutes(mux)
 
 	// xDS discovery endpoint (legacy JSON API)
 	mux.HandleFunc("POST /v3/discovery", handleXdsDiscovery(cfgStore))
+	mux.Handle("GET /metrics", metrics)
+
+	// Rate limiting
+	frontierRateLimit := 300
+	if env := os.Getenv("FRONTIER_RATE_LIMIT"); env != "" {
+		if v, err := strconv.Atoi(env); err == nil && v > 0 {
+			frontierRateLimit = v
+		}
+	}
+	rl := ratelimit.New(frontierRateLimit, time.Minute)
 
 	httpSrv := &http.Server{
 		Addr:         *httpAddr,
-		Handler:      mux,
+		Handler:      rl.Middleware(metrics.Instrument(mux)),
 		ReadTimeout:  15 * time.Second,
 		WriteTimeout: 15 * time.Second,
 		IdleTimeout:  60 * time.Second,

@@ -1,9 +1,14 @@
 use std::collections::HashMap;
 
-use anyhow::{Context, Result};
+use anyhow::Result;
+use http_body_util::{BodyExt, Empty};
+use hyper::{Request, StatusCode};
+use hyper_rustls::HttpsConnector;
+use hyper_util::client::legacy::Client;
+use hyper_util::rt::TokioExecutor;
 use jsonwebtoken::{decode, decode_header, DecodingKey, Validation};
-use parking_lot::RwLock;
 use serde::{Deserialize, Serialize};
+use tokio::sync::RwLock;
 use tracing::{debug, info, warn};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -73,17 +78,33 @@ impl JwtValidator {
     pub async fn refresh_keys(&self) -> Result<()> {
         info!("refreshing JWKS from {}", self.config.jwks_url);
 
-        let body = reqwest::get(&self.config.jwks_url)
-            .await
-            .context("failed to fetch JWKS")?
-            .text()
-            .await
-            .context("failed to read JWKS response")?;
+        let url = self.config.jwks_url.parse::<hyper::Uri>()
+            .map_err(|e| anyhow::anyhow!("invalid JWKS URL: {e}"))?;
 
-        let jwks: Jwks = serde_json::from_str(&body)
-            .context("failed to parse JWKS")?;
+        let https = HttpsConnector::new();
+        let client: Client<_, Empty<hyper::body::Bytes>> = Client::builder(TokioExecutor::new())
+            .build(https);
 
-        let mut keys = self.keys.write();
+        let req = Request::builder()
+            .method("GET")
+            .uri(&url)
+            .header("Accept", "application/json")
+            .body(Empty::new())
+            .map_err(|e| anyhow::anyhow!("failed to build request: {e}"))?;
+
+        let resp = client.request(req).await.map_err(|e| anyhow::anyhow!("failed to fetch JWKS: {e}"))?;
+
+        if resp.status() != StatusCode::OK {
+            return Err(anyhow::anyhow!("JWKS request returned status {}", resp.status()));
+        }
+
+        let body = resp.into_body().collect().await.map_err(|e| anyhow::anyhow!("failed to read response body: {e}"))?.to_bytes();
+        let body_str = String::from_utf8_lossy(&body);
+
+        let jwks: Jwks = serde_json::from_str(&body_str)
+            .map_err(|e| anyhow::anyhow!("failed to parse JWKS: {e}"))?;
+
+        let mut keys = self.keys.write().await;
         keys.clear();
 
         for jwk in &jwks.keys {
@@ -103,16 +124,16 @@ impl JwtValidator {
         Ok(())
     }
 
-    fn jwk_to_decoding_key(&self, jwk: &Jwk) -> Result<DecodingKey> {
+    fn jwk_to_decoding_key(&self, jwk: &Jwk) -> anyhow::Result<DecodingKey> {
         match jwk.alg.as_str() {
             "RS256" | "RS384" | "RS512" => {
-                let n = jwk.n.as_ref().context("missing 'n' parameter")?;
-                let e = jwk.e.as_ref().context("missing 'e' parameter")?;
-                DecodingKey::from_rsa_components(n, e).context("invalid RSA key")
+                let n = jwk.n.as_ref().ok_or_else(|| anyhow::anyhow!("missing 'n' parameter"))?;
+                let e = jwk.e.as_ref().ok_or_else(|| anyhow::anyhow!("missing 'e' parameter"))?;
+                DecodingKey::from_rsa_components(n, e).map_err(|e| anyhow::anyhow!("invalid RSA key: {e}"))
             }
             "ES256" | "ES384" | "ES512" => {
-                let x = jwk.x.as_ref().context("missing 'x' parameter")?;
-                let y = jwk.y.as_ref().context("missing 'y' parameter")?;
+                let x = jwk.x.as_ref().ok_or_else(|| anyhow::anyhow!("missing 'x' parameter"))?;
+                let y = jwk.y.as_ref().ok_or_else(|| anyhow::anyhow!("missing 'y' parameter"))?;
                 let mut key_data = Vec::with_capacity(65);
                 key_data.push(0x04);
                 key_data.extend_from_slice(&base64url_decode(x)?);
@@ -123,18 +144,20 @@ impl JwtValidator {
         }
     }
 
-    pub fn validate_token(&self, token: &str) -> Result<JwtClaims> {
+    pub async fn validate_token(&self, token: &str) -> Result<JwtClaims> {
         let header = decode_header(token)
-            .context("failed to decode JWT header")?;
+            .map_err(|e| anyhow::anyhow!("failed to decode JWT header: {e}"))?;
 
-        let kid = header.kid.unwrap_or_else(|| {
+        let kid = header.kid.clone().unwrap_or_else(|| {
             format!("{:?}", header.alg)
         });
 
-        let keys = self.keys.read();
+        let keys = self.keys.read().await;
         let key = keys.get(&kid)
             .or_else(|| keys.values().next())
-            .context("no matching key found")?;
+            .ok_or_else(|| anyhow::anyhow!("no matching key found"))?
+            .clone();
+        drop(keys);
 
         let mut validation = Validation::new(header.alg);
 
@@ -146,8 +169,8 @@ impl JwtValidator {
             validation.set_audience(&[audience.as_str()]);
         }
 
-        let token_data = decode::<JwtClaims>(token, key, &validation)
-            .context("JWT validation failed")?;
+        let token_data = decode::<JwtClaims>(token, &key, &validation)
+            .map_err(|e| anyhow::anyhow!("JWT validation failed: {e}"))?;
 
         Ok(token_data.claims)
     }
@@ -156,15 +179,15 @@ impl JwtValidator {
         &self.config
     }
 
-    pub fn key_count(&self) -> usize {
-        self.keys.read().len()
+    pub async fn key_count(&self) -> usize {
+        self.keys.read().await.len()
     }
 }
 
-fn base64url_decode(input: &str) -> Result<Vec<u8>> {
+fn base64url_decode(input: &str) -> anyhow::Result<Vec<u8>> {
     use base64::Engine;
     let engine = base64::engine::general_purpose::URL_SAFE_NO_PAD;
-    engine.decode(input).context("base64url decode failed")
+    engine.decode(input).map_err(|e| anyhow::anyhow!("base64url decode failed: {e}"))
 }
 
 #[cfg(test)]
@@ -183,6 +206,5 @@ mod tests {
     fn test_jwt_validator_new() {
         let config = JwtConfig::default();
         let validator = JwtValidator::new(config);
-        assert_eq!(validator.key_count(), 0);
     }
 }

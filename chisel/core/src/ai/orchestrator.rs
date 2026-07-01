@@ -1,4 +1,3 @@
-use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::{Context, Result};
@@ -78,8 +77,34 @@ pub struct SecurityFinding {
     pub remediation: String,
 }
 
+/// Enum-based provider to avoid dyn compatibility issues with async fn in trait.
+#[derive(Debug, Clone)]
+pub enum LlmProviderEnum {
+    OpenAi(super::openai::OpenAiProvider),
+    Claude(super::claude::ClaudeProvider),
+    Ollama(super::ollama::OllamaProvider),
+}
+
+impl LlmProviderEnum {
+    pub fn name(&self) -> &str {
+        match self {
+            LlmProviderEnum::OpenAi(p) => p.name(),
+            LlmProviderEnum::Claude(p) => p.name(),
+            LlmProviderEnum::Ollama(p) => p.name(),
+        }
+    }
+
+    pub async fn complete(&self, prompt: &str) -> Result<String, LlmError> {
+        match self {
+            LlmProviderEnum::OpenAi(p) => p.complete(prompt).await,
+            LlmProviderEnum::Claude(p) => p.complete(prompt).await,
+            LlmProviderEnum::Ollama(p) => p.complete(prompt).await,
+        }
+    }
+}
+
 pub struct AiOrchestrator {
-    providers: Vec<Arc<dyn LlmProvider>>,
+    providers: Vec<LlmProviderEnum>,
     retry_policy: RetryPolicy,
     cache: PromptCache,
 }
@@ -93,7 +118,7 @@ impl AiOrchestrator {
         }
     }
 
-    pub fn with_provider(mut self, provider: Arc<dyn LlmProvider>) -> Self {
+    pub fn with_provider(mut self, provider: LlmProviderEnum) -> Self {
         self.providers.push(provider);
         self
     }

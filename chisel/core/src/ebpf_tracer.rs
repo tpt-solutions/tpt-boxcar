@@ -2,7 +2,6 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 
 use anyhow::Result;
-use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 use tracing::info;
 
@@ -130,8 +129,7 @@ pub struct EbpfStats {
     pub cpu_time_ns: u64,
 }
 
-#[async_trait]
-pub trait TracerProvider: Send + Sync {
+pub trait TracerProvider {
     async fn start_tracing(&self, config: &TraceConfig) -> Result<String>;
     async fn stop_tracing(&self, trace_id: &str) -> Result<FileAccessTrace>;
     async fn get_stats(&self, trace_id: &str) -> Result<EbpfStats>;
@@ -184,7 +182,6 @@ impl Default for EbpfTracer {
     }
 }
 
-#[async_trait]
 impl TracerProvider for EbpfTracer {
     async fn start_tracing(&self, config: &TraceConfig) -> Result<String> {
         let trace_id = uuid::Uuid::new_v4().to_string();

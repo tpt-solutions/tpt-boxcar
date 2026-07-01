@@ -2,13 +2,12 @@ use std::net::ToSocketAddrs;
 use std::sync::Arc;
 
 use anyhow::{bail, Context, Result};
-use async_trait::async_trait;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
 use tokio::sync::Mutex;
 use tracing::{debug, info, instrument};
 
-use super::wire::{DriverKind, WireDriver, WireTransaction};
+use super::wire::DriverKind;
 use super::QueryRow;
 
 pub struct RedisWireDriver {
@@ -155,7 +154,7 @@ impl RedisWireDriver {
         }
     }
 
-    async fn send_and_read(&self, args: &[&str]) -> Result<RespFrame> {
+    pub async fn send_and_read(&self, args: &[&str]) -> Result<RespFrame> {
         let encoded = Self::encode_command(args);
         let mut guard = self.stream.lock().await;
         let stream = guard.as_mut().context("not connected")?;
@@ -255,17 +254,16 @@ impl RespFrame {
     }
 }
 
-#[async_trait]
-impl WireDriver for RedisWireDriver {
-    fn kind(&self) -> DriverKind {
+impl RedisWireDriver {
+    pub fn kind(&self) -> DriverKind {
         DriverKind::Redis
     }
 
-    fn is_connected(&self) -> bool {
+    pub fn is_connected(&self) -> bool {
         self.connected
     }
 
-    async fn connect(
+    pub async fn connect(
         &mut self,
         host: &str,
         port: u16,
@@ -337,7 +335,7 @@ impl WireDriver for RedisWireDriver {
     /// For Redis, the `sql` field is the Redis command (e.g. "GET", "SET", "DEL"),
     /// and `params` are the arguments. Returns a single-column "value" result.
     #[instrument(skip(self, params), fields(sql))]
-    async fn query(&self, sql: &str, params: &[serde_json::Value]) -> Result<QueryRow> {
+    pub async fn query(&self, sql: &str, params: &[serde_json::Value]) -> Result<QueryRow> {
         let mut args: Vec<String> = Vec::with_capacity(1 + params.len());
         args.push(sql.to_string());
         for p in params {
@@ -366,7 +364,7 @@ impl WireDriver for RedisWireDriver {
 
     /// For Redis, execute returns 1 for OK/integer responses, 0 otherwise.
     #[instrument(skip(self, params), fields(sql))]
-    async fn execute(&self, sql: &str, params: &[serde_json::Value]) -> Result<u64> {
+    pub async fn execute(&self, sql: &str, params: &[serde_json::Value]) -> Result<u64> {
         let mut args: Vec<String> = Vec::with_capacity(1 + params.len());
         args.push(sql.to_string());
         for p in params {
@@ -387,18 +385,7 @@ impl WireDriver for RedisWireDriver {
         }
     }
 
-    async fn begin_transaction(&self) -> Result<Box<dyn WireTransaction>> {
-        match self.send_and_read(&["MULTI"]).await? {
-            RespFrame::Simple(s) if s == "OK" => {}
-            RespFrame::Error(e) => bail!("MULTI failed: {}", e),
-            other => bail!("unexpected MULTI response: {:?}", other),
-        }
-        Ok(Box::new(RedisWireTransaction {
-            driver: self.clone(),
-        }))
-    }
-
-    async fn ping(&self) -> Result<()> {
+    pub async fn ping(&self) -> Result<()> {
         if !self.connected {
             bail!("not connected");
         }
@@ -422,76 +409,6 @@ impl Clone for RedisWireDriver {
             stream: Arc::clone(&self.stream),
             connected: self.connected,
             db: self.db,
-        }
-    }
-}
-
-pub struct RedisWireTransaction {
-    driver: RedisWireDriver,
-}
-
-#[async_trait]
-impl WireTransaction for RedisWireTransaction {
-    async fn query(&mut self, sql: &str, params: &[serde_json::Value]) -> Result<QueryRow> {
-        // In a MULTI block, commands return +QUEUED. Actual results come with EXEC.
-        // For simplicity, queue the command and return the queued status.
-        let mut args: Vec<String> = Vec::with_capacity(1 + params.len());
-        args.push(sql.to_string());
-        for p in params {
-            args.push(match p {
-                serde_json::Value::String(s) => s.clone(),
-                other => other.to_string(),
-            });
-        }
-        let arg_refs: Vec<&str> = args.iter().map(|s| s.as_str()).collect();
-
-        let frame = self.driver.send_and_read(&arg_refs).await?;
-        match &frame {
-            RespFrame::Simple(s) if s == "QUEUED" => Ok(QueryRow {
-                columns: vec!["status".to_string()],
-                values: vec![serde_json::Value::String("QUEUED".to_string())],
-            }),
-            RespFrame::Error(e) => bail!("Redis queue error: {}", e),
-            other => Ok(QueryRow {
-                columns: vec!["result".to_string()],
-                values: vec![RedisWireDriver::frame_to_json(other)],
-            }),
-        }
-    }
-
-    async fn execute(&mut self, sql: &str, params: &[serde_json::Value]) -> Result<u64> {
-        let mut args: Vec<String> = Vec::with_capacity(1 + params.len());
-        args.push(sql.to_string());
-        for p in params {
-            args.push(match p {
-                serde_json::Value::String(s) => s.clone(),
-                other => other.to_string(),
-            });
-        }
-        let arg_refs: Vec<&str> = args.iter().map(|s| s.as_str()).collect();
-
-        let frame = self.driver.send_and_read(&arg_refs).await?;
-        match &frame {
-            RespFrame::Simple(s) if s == "QUEUED" => Ok(1),
-            RespFrame::Error(e) => bail!("Redis queue error: {}", e),
-            RespFrame::Integer(i) => Ok(*i as u64),
-            _ => Ok(0),
-        }
-    }
-
-    async fn commit(self: Box<Self>) -> Result<()> {
-        match self.driver.send_and_read(&["EXEC"]).await? {
-            RespFrame::Array(_) => Ok(()),
-            RespFrame::Error(e) => bail!("EXEC failed: {}", e),
-            other => bail!("unexpected EXEC response: {:?}", other),
-        }
-    }
-
-    async fn rollback(self: Box<Self>) -> Result<()> {
-        match self.driver.send_and_read(&["DISCARD"]).await? {
-            RespFrame::Simple(s) if s == "OK" => Ok(()),
-            RespFrame::Error(e) => bail!("DISCARD failed: {}", e),
-            other => bail!("unexpected DISCARD response: {:?}", other),
         }
     }
 }

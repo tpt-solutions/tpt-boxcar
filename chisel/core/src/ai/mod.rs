@@ -16,7 +16,7 @@ pub use json_extractor::JsonExtractor;
 pub use ollama::OllamaProvider;
 pub use openai::OpenAiProvider;
 pub use orchestrator::{
-    AiOrchestrator, DistillationPlan, DistillationStep, LlmRequest, LlmResponse, MigrationPhase,
+    AiOrchestrator, DistillationPlan, DistillationStep, LlmProviderEnum, LlmRequest, LlmResponse, MigrationPhase,
     MigrationPlan, SecurityAudit, SecurityFinding,
 };
 pub use prompt_library::{PromptLibrary, PromptTemplate, ResponseFormat};

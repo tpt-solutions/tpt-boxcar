@@ -8,7 +8,10 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"strconv"
 	"time"
+
+	"github.com/tpt-cloud-native/scope/backend/internal/ratelimit"
 
 	"github.com/ClickHouse/clickhouse-go/v2"
 	"github.com/ClickHouse/clickhouse-go/v2/lib/driver"
@@ -381,11 +384,21 @@ func main() {
 	mux.HandleFunc("GET /api/v1/logs/stream", apiKeyMiddleware(qs.handleLogsStream))
 	mux.HandleFunc("GET /api/v1/wasm", apiKeyMiddleware(qs.handleWasm))
 	mux.HandleFunc("GET /health", qs.handleHealth)
+	mux.Handle("GET /metrics", MetricsHandler())
+
+	// Rate limiting
+	queryRateLimit := 200
+	if env := os.Getenv("SCOPE_QUERY_RATE_LIMIT"); env != "" {
+		if v, err := strconv.Atoi(env); err == nil && v > 0 {
+			queryRateLimit = v
+		}
+	}
+	rl := ratelimit.New(queryRateLimit, time.Minute)
 
 	addr := env("SCOPE_BACKEND_ADDR", ":8081")
 	srv := &http.Server{
 		Addr:         addr,
-		Handler:      corsMiddleware(mux),
+		Handler:      rl.Middleware(corsMiddleware(instrumentMiddleware(mux))),
 		ReadTimeout:  15 * time.Second,
 		WriteTimeout: 0, // 0 = no limit; required for SSE streams
 		IdleTimeout:  60 * time.Second,

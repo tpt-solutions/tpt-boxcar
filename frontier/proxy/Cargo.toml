@@ -19,13 +19,13 @@ tracing.workspace = true
 rustls = "0.23"
 rustls-pemfile = "2"
 tokio-rustls = "0.26"
+hyper-rustls = { version = "0.27", features = ["webpki-roots"] }
 wasmtime = "25"
-parking_lot = "0.12"
 ahash = "0.8"
 jsonwebtoken = "9"
+parking_lot = "0.12"
 rand = "0.8"
 base64 = "0.22"
-reqwest = { version = "0.12", features = ["json"] }
 
 [dev-dependencies]
 criterion = { version = "0.5", features = ["html_reports"] }

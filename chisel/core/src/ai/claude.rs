@@ -1,13 +1,18 @@
-use async_trait::async_trait;
-use reqwest::Client;
+use anyhow::Result;
+use http_body_util::{BodyExt, Full};
+use hyper::{body::Bytes, Request};
+use hyper_rustls::HttpsConnector;
+use hyper_util::client::legacy::Client;
+use hyper_util::rt::TokioExecutor;
+use serde_json::json;
 use tracing::info;
 
 use super::error::LlmError;
 use super::retry::extract_retry_after;
 use super::traits::LlmProvider;
 
+#[derive(Debug, Clone)]
 pub struct ClaudeProvider {
-    client: Client,
     api_key: String,
     model: String,
 }
@@ -15,19 +20,17 @@ pub struct ClaudeProvider {
 impl ClaudeProvider {
     pub fn new(api_key: &str, model: &str) -> Self {
         Self {
-            client: Client::new(),
             api_key: api_key.to_string(),
             model: model.to_string(),
         }
     }
 }
 
-#[async_trait]
 impl LlmProvider for ClaudeProvider {
     async fn complete(&self, prompt: &str) -> Result<String, LlmError> {
         info!("claude api request to model: {}", self.model);
 
-        let body = serde_json::json!({
+        let body = json!({
             "model": self.model,
             "max_tokens": 4096,
             "stream": true,
@@ -37,16 +40,24 @@ impl LlmProvider for ClaudeProvider {
             }]
         });
 
-        let resp = self
-            .client
-            .post("https://api.anthropic.com/v1/messages")
+        let url = "https://api.anthropic.com/v1/messages";
+
+        let https = HttpsConnector::with_native_roots();
+        let client: Client<_, Full<Bytes>> = Client::builder(TokioExecutor::new())
+            .build(https);
+
+        let req = Request::builder()
+            .method("POST")
+            .uri(url)
             .header("x-api-key", &self.api_key)
             .header("anthropic-version", "2023-06-01")
             .header("content-type", "application/json")
-            .json(&body)
-            .send()
-            .await
-            .map_err(|e| LlmError::Network(format!("failed to send request: {e}")))?;
+            .body(Full::new(Bytes::from(body.to_string())))
+            .map_err(|e| LlmError::Network(format!("failed to build request: {e}")))?;
+
+        let resp = client.request(req).await.map_err(|e| {
+            LlmError::Network(format!("failed to fetch response: {e}"))
+        })?;
 
         let status = resp.status();
         if !status.is_success() {
@@ -56,18 +67,10 @@ impl LlmProvider for ClaudeProvider {
                 return Err(LlmError::RateLimit { retry_after });
             }
             if status.as_u16() == 401 {
-                let text = resp
-                    .text()
-                    .await
-                    .unwrap_or_else(|_| "unauthorized".into());
-                return Err(LlmError::AuthError(text));
+                return Err(LlmError::AuthError("unauthorized".into()));
             }
-            let text = resp
-                .text()
-                .await
-                .unwrap_or_else(|_| "unknown error".into());
             return Err(LlmError::Unavailable(format!(
-                "claude returned {status}: {text}"
+                "claude returned {status}"
             )));
         }
 
@@ -75,12 +78,11 @@ impl LlmProvider for ClaudeProvider {
         let mut buffer = String::new();
 
         let mut resp = resp;
-        while let Some(chunk) = resp
-            .chunk()
-            .await
-            .map_err(|e| LlmError::Network(format!("stream read error: {e}")))?
-        {
-            buffer.push_str(&String::from_utf8_lossy(&chunk));
+        while let Some(next) = resp.frame().await {
+            let frame = next.map_err(|e| LlmError::Network(format!("stream read error: {e}")))?;
+            if let Some(data) = frame.into_data().ok() {
+                buffer.push_str(&String::from_utf8_lossy(&data));
+            }
 
             while let Some(pos) = buffer.find('\n') {
                 let line = buffer[..pos].trim().to_string();

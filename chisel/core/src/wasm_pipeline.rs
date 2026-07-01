@@ -1,7 +1,6 @@
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
-use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 use tracing::info;
 
@@ -82,31 +81,70 @@ pub struct WasmModule {
     pub memory_pages: Option<u32>,
 }
 
-#[async_trait]
-pub trait WasmCompiler: Send + Sync {
-    fn language(&self) -> &str;
-    fn file_extensions(&self) -> &[&str];
-    async fn compile(
+/// Enum-based compiler to avoid dyn compatibility issues with async fn in trait
+#[derive(Debug, Clone)]
+pub enum WasmCompiler {
+    Rust(RustWasmCompiler),
+    Go(GoWasmCompiler),
+    C(CWasmCompiler),
+    Emscripten(EmscriptenCompiler),
+}
+
+impl WasmCompiler {
+    pub fn language(&self) -> &str {
+        match self {
+            WasmCompiler::Rust(c) => c.language(),
+            WasmCompiler::Go(c) => c.language(),
+            WasmCompiler::C(c) => c.language(),
+            WasmCompiler::Emscripten(c) => c.language(),
+        }
+    }
+
+    pub fn file_extensions(&self) -> &[&str] {
+        match self {
+            WasmCompiler::Rust(c) => c.file_extensions(),
+            WasmCompiler::Go(c) => c.file_extensions(),
+            WasmCompiler::C(c) => c.file_extensions(),
+            WasmCompiler::Emscripten(c) => c.file_extensions(),
+        }
+    }
+
+    pub async fn compile(
         &self,
         source_path: &Path,
         config: &CompilationConfig,
-    ) -> Result<CompilationResult>;
-    async fn validate_source(&self, source_path: &Path) -> Result<bool>;
+    ) -> Result<CompilationResult> {
+        match self {
+            WasmCompiler::Rust(c) => c.compile(source_path, config).await,
+            WasmCompiler::Go(c) => c.compile(source_path, config).await,
+            WasmCompiler::C(c) => c.compile(source_path, config).await,
+            WasmCompiler::Emscripten(c) => c.compile(source_path, config).await,
+        }
+    }
+
+    pub async fn validate_source(&self, source_path: &Path) -> Result<bool> {
+        match self {
+            WasmCompiler::Rust(c) => c.validate_source(source_path).await,
+            WasmCompiler::Go(c) => c.validate_source(source_path).await,
+            WasmCompiler::C(c) => c.validate_source(source_path).await,
+            WasmCompiler::Emscripten(c) => c.validate_source(source_path).await,
+        }
+    }
 }
 
+#[derive(Debug, Clone)]
 pub struct RustWasmCompiler;
 
-#[async_trait]
-impl WasmCompiler for RustWasmCompiler {
-    fn language(&self) -> &str {
+impl RustWasmCompiler {
+    pub fn language(&self) -> &str {
         "rust"
     }
 
-    fn file_extensions(&self) -> &[&str] {
+    pub fn file_extensions(&self) -> &[&str] {
         &["rs", "toml"]
     }
 
-    async fn compile(
+    pub async fn compile(
         &self,
         source_path: &Path,
         config: &CompilationConfig,
@@ -159,7 +197,7 @@ impl WasmCompiler for RustWasmCompiler {
         })
     }
 
-    async fn validate_source(&self, source_path: &Path) -> Result<bool> {
+    pub async fn validate_source(&self, source_path: &Path) -> Result<bool> {
         let cargo_toml = source_path.join("Cargo.toml");
         if !cargo_toml.exists() {
             return Ok(false);
@@ -170,19 +208,19 @@ impl WasmCompiler for RustWasmCompiler {
     }
 }
 
+#[derive(Debug, Clone)]
 pub struct GoWasmCompiler;
 
-#[async_trait]
-impl WasmCompiler for GoWasmCompiler {
-    fn language(&self) -> &str {
+impl GoWasmCompiler {
+    pub fn language(&self) -> &str {
         "go"
     }
 
-    fn file_extensions(&self) -> &[&str] {
+    pub fn file_extensions(&self) -> &[&str] {
         &["go", "mod", "sum"]
     }
 
-    async fn compile(
+    pub async fn compile(
         &self,
         source_path: &Path,
         config: &CompilationConfig,
@@ -219,7 +257,7 @@ impl WasmCompiler for GoWasmCompiler {
         })
     }
 
-    async fn validate_source(&self, source_path: &Path) -> Result<bool> {
+    pub async fn validate_source(&self, source_path: &Path) -> Result<bool> {
         let go_mod = source_path.join("go.mod");
         if !go_mod.exists() {
             return Ok(false);
@@ -230,19 +268,19 @@ impl WasmCompiler for GoWasmCompiler {
     }
 }
 
+#[derive(Debug, Clone)]
 pub struct CWasmCompiler;
 
-#[async_trait]
-impl WasmCompiler for CWasmCompiler {
-    fn language(&self) -> &str {
+impl CWasmCompiler {
+    pub fn language(&self) -> &str {
         "c"
     }
 
-    fn file_extensions(&self) -> &[&str] {
+    pub fn file_extensions(&self) -> &[&str] {
         &["c", "h", "cpp", "cc", "cxx"]
     }
 
-    async fn compile(
+    pub async fn compile(
         &self,
         source_path: &Path,
         config: &CompilationConfig,
@@ -276,7 +314,7 @@ impl WasmCompiler for CWasmCompiler {
         })
     }
 
-    async fn validate_source(&self, source_path: &Path) -> Result<bool> {
+    pub async fn validate_source(&self, source_path: &Path) -> Result<bool> {
         let has_c = tokio::fs::read_dir(source_path)
             .await
             .context("Failed to read source directory")?
@@ -290,6 +328,7 @@ impl WasmCompiler for CWasmCompiler {
     }
 }
 
+#[derive(Debug, Clone)]
 pub struct EmscriptenCompiler;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -311,17 +350,16 @@ impl Default for EmscriptenConfig {
     }
 }
 
-#[async_trait]
-impl WasmCompiler for EmscriptenCompiler {
-    fn language(&self) -> &str {
+impl EmscriptenCompiler {
+    pub fn language(&self) -> &str {
         "c_cpp_emscripten"
     }
 
-    fn file_extensions(&self) -> &[&str] {
+    pub fn file_extensions(&self) -> &[&str] {
         &["c", "cpp", "cc", "cxx", "h", "hpp"]
     }
 
-    async fn compile(
+    pub async fn compile(
         &self,
         source_path: &Path,
         config: &CompilationConfig,
@@ -376,7 +414,7 @@ impl WasmCompiler for EmscriptenCompiler {
         })
     }
 
-    async fn validate_source(&self, source_path: &Path) -> Result<bool> {
+    pub async fn validate_source(&self, source_path: &Path) -> Result<bool> {
         if source_path.is_file() {
             let ext = source_path
                 .extension()
@@ -399,25 +437,25 @@ impl WasmCompiler for EmscriptenCompiler {
 }
 
 pub struct WasmPipeline {
-    compilers: Vec<Box<dyn WasmCompiler>>,
+    compilers: Vec<WasmCompiler>,
 }
 
 impl WasmPipeline {
     pub fn new() -> Self {
         Self {
             compilers: vec![
-                Box::new(RustWasmCompiler),
-                Box::new(GoWasmCompiler),
-                Box::new(CWasmCompiler),
-                Box::new(EmscriptenCompiler),
+                WasmCompiler::Rust(RustWasmCompiler),
+                WasmCompiler::Go(GoWasmCompiler),
+                WasmCompiler::C(CWasmCompiler),
+                WasmCompiler::Emscripten(EmscriptenCompiler),
             ],
         }
     }
 
-    pub async fn detect_language(&self, source_path: &Path) -> Option<&dyn WasmCompiler> {
+    pub async fn detect_language(&self, source_path: &Path) -> Option<&WasmCompiler> {
         for compiler in &self.compilers {
             if compiler.validate_source(source_path).await.unwrap_or(false) {
-                return Some(compiler.as_ref());
+                return Some(compiler);
             }
         }
         None
