@@ -1,6 +1,6 @@
-TPT Cloud-Native: Open Source Product Design Document
+TPT Boxcar: Open Source Product Design Document
 Executive Summary
-The TPT Cloud-Native project addresses the critical tooling gap in the modern cloud-native landscape. While the underlying engines for containers and WebAssembly are mature, the developer experience, state management, observability, and edge routing tools remain highly fragmented and often locked behind proprietary paywalls. TPT Cloud-Native provides a unified, high-performance, and entirely free product line, released under the Apache 2.0 License. This suite is a public good designed to guide applications seamlessly from local development to the edge, democratizing access to next-generation infrastructure and ensuring the community retains full ownership of their tooling.
+The TPT Boxcar project addresses the critical tooling gap in the modern cloud-native landscape. While the underlying engines for containers and WebAssembly are mature, the developer experience, state management, observability, and edge routing tools remain highly fragmented and often locked behind proprietary paywalls. TPT Boxcar provides a unified, high-performance, and entirely free product line, released under the Apache 2.0 License. This suite is a public good designed to guide applications seamlessly from local development to the edge, democratizing access to next-generation infrastructure and ensuring the community retains full ownership of their tooling.
 1. TPT Origin (The Unified Local Sandbox)
 The "Anti-Docker Desktop"
 Modern developers are trapped between two frustrating worlds when building locally. On one hand, they are forced to use heavy, resource-hogging container runtimes that consume gigabytes of RAM and require persistent background daemons just to run a simple local database. On the other hand, the rise of WebAssembly (Wasm) requires installing entirely separate, fragmented runtimes and struggling to network them together. TPT Origin solves this by providing a unified, ultra-lightweight local development environment that seamlessly orchestrates both OCI containers and Wasm modules side-by-side, completely eliminating the need for heavy background virtual machines.
@@ -53,7 +53,7 @@ Plugin Execution: Embedded Wasmtime or WasmEdge to execute user-defined Wasm plu
 Control Plane: Go or Rust, implementing the open xDS API so it can integrate seamlessly into existing Istio or Consul service meshes.
 Plugin SDK: TypeScript (using AssemblyScript) and Rust SDKs, allowing developers to easily write and compile their custom gateway logic.
 The TPT Ecosystem Flywheel (The Open Source Loop)
-The true power of TPT Cloud-Native is how the projects feed into a self-sustaining, community-driven loop:
+The true power of TPT Boxcar is how the projects feed into a self-sustaining, community-driven loop:
 A developer downloads TPT Origin to build their app locally, enjoying a frictionless, bloat-free experience.
 They push their code, where TPT Chisel automatically shrinks their images and migrates compatible microservices to Wasm in their CI/CD pipeline.
 They deploy to production, spinning up TPT Tether and TPT Frontier on their own Kubernetes cluster or bare-metal servers to handle traffic and state securely.

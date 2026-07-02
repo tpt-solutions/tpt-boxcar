@@ -11,7 +11,7 @@ import (
 	"strconv"
 	"time"
 
-	"github.com/tpt-cloud-native/scope/backend/internal/ratelimit"
+	"github.com/tpt-boxcar/scope/backend/internal/ratelimit"
 
 	"github.com/ClickHouse/clickhouse-go/v2"
 	"github.com/ClickHouse/clickhouse-go/v2/lib/driver"

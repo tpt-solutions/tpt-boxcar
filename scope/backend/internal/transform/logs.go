@@ -6,7 +6,7 @@ import (
 	commonpb "go.opentelemetry.io/proto/otlp/common/v1"
 	logpb "go.opentelemetry.io/proto/otlp/logs/v1"
 
-	"github.com/tpt-cloud-native/scope/backend/internal/schema"
+	"github.com/tpt-boxcar/scope/backend/internal/schema"
 )
 
 // LogToRecord converts an OTLP LogRecord plus resource attributes into a LogRecord.

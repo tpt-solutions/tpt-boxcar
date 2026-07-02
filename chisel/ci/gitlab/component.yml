@@ -18,7 +18,7 @@ spec:
       default: "cyclonedx"
 
 chisel-distill:
-  image: ghcr.io/tpt-cloud-native/chisel:latest
+  image: ghcr.io/tpt-boxcar/chisel:latest
   script:
     - chisel distill
       --image "$IMAGE"

@@ -7,7 +7,7 @@ TPT Frontier plugins are WebAssembly modules that extend the proxy's request/res
 ## Prerequisites
 
 - Rust 1.75+ with `wasm32-wasi` target: `rustup target add wasm32-wasi`
-- For TypeScript plugins: Node.js 18+, `@tpt-cloud-native/frontier-plugin-sdk`
+- For TypeScript plugins: Node.js 18+, `@tpt-boxcar/frontier-plugin-sdk`
 
 ## Rust Plugin
 
@@ -72,7 +72,7 @@ Use the SDK's test utilities to mock host functions and validate filter behavior
 ```bash
 mkdir my-ts-plugin && cd my-ts-plugin
 npm init -y
-npm install @tpt-cloud-native/frontier-plugin-sdk
+npm install @tpt-boxcar/frontier-plugin-sdk
 npm install -D typescript
 ```
 
@@ -86,7 +86,7 @@ import {
   FilterResult,
   PluginContext,
   continueResult,
-} from "@tpt-cloud-native/frontier-plugin-sdk";
+} from "@tpt-boxcar/frontier-plugin-sdk";
 
 class MyPlugin implements FrontierPlugin {
   private host: HostFunctions | null = null;

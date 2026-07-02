@@ -1,5 +1,5 @@
 {
-  "name": "@tpt-cloud-native/frontier-plugin-sdk",
+  "name": "@tpt-boxcar/frontier-plugin-sdk",
   "version": "0.1.0",
   "description": "TypeScript SDK for TPT Frontier Wasm plugins",
   "main": "dist/index.js",
@@ -20,11 +20,11 @@
     "edge",
     "proxy"
   ],
-  "author": "TPT Cloud Native",
+  "author": "TPT Boxcar",
   "license": "Apache-2.0",
   "repository": {
     "type": "git",
-    "url": "https://github.com/tpt-cloud-native/tpt-cloud-native",
+    "url": "https://github.com/tpt-boxcar/tpt-boxcar",
     "directory": "frontier/typescript-sdk"
   },
   "devDependencies": {

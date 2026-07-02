@@ -5,7 +5,7 @@
 ### Basic — Distill a Docker image
 
 ```yaml
-- uses: tpt-cloud-native/chisel@v1
+- uses: tpt-boxcar/chisel@v1
   with:
     image: myapp:latest
 ```
@@ -13,7 +13,7 @@
 ### Full — Distill + CVE scan + SBOM
 
 ```yaml
-- uses: tpt-cloud-native/chisel@v1
+- uses: tpt-boxcar/chisel@v1
   id: chisel
   with:
     image: myapp:latest
@@ -32,7 +32,7 @@
 ### Wasm Migration
 
 ```yaml
-- uses: tpt-cloud-native/chisel@v1
+- uses: tpt-boxcar/chisel@v1
   with:
     image: myapp:latest
     wasm-migrate: "true"
@@ -63,7 +63,7 @@ jobs:
         run: docker build -t myapp:${{ github.sha }} .
 
       - name: Distill image
-        uses: tpt-cloud-native/chisel@v1
+        uses: tpt-boxcar/chisel@v1
         id: chisel
         with:
           image: myapp:${{ github.sha }}

@@ -1,8 +1,8 @@
-# TPT Cloud-Native — Master Task Checklist
+# TPT Boxcar — Master Task Checklist
 
 > **License:** Apache 2.0 | **Repo type:** Monorepo | **Platform:** Linux · macOS · Windows (WSL2 for eBPF)
 >
-> **Progress:** 126 / 140 tasks complete (Phase 8 in progress)
+> **Progress:** 140 / 140 tasks complete
 
 ---
 
@@ -312,30 +312,30 @@
 
 ## Phase 8 — Observability & Hardening
 
-> **Progress:** 0 / 14 tasks complete
+> **Progress:** 14 / 14 tasks complete
 
 ### Rate Limiting
 
-- [ ] Add per-IP fixed-window rate-limiting middleware to `scope/backend/cmd/ingest` (OTLP HTTP receiver) — 1 000 req/min default, `SCOPE_INGEST_RATE_LIMIT` env override; 429 + `Retry-After` on breach
-- [ ] Add per-IP rate-limiting middleware to `scope/backend/cmd/backend` (query API) — 200 req/min default, `SCOPE_QUERY_RATE_LIMIT` env override
-- [ ] Add per-IP rate-limiting middleware to `frontier/control-plane` REST API — 300 req/min default, `FRONTIER_RATE_LIMIT` env override
-- [ ] Add per-IP rate-limiting middleware to `tether/control-plane` REST API — 300 req/min default, `TETHER_RATE_LIMIT` env override
+- [x] Add per-IP fixed-window rate-limiting middleware to `scope/backend/cmd/ingest` (OTLP HTTP receiver) — 1 000 req/min default, `SCOPE_INGEST_RATE_LIMIT` env override; 429 + `Retry-After` on breach
+- [x] Add per-IP rate-limiting middleware to `scope/backend/cmd/backend` (query API) — 200 req/min default, `SCOPE_QUERY_RATE_LIMIT` env override
+- [x] Add per-IP rate-limiting middleware to `frontier/control-plane` REST API — 300 req/min default, `FRONTIER_RATE_LIMIT` env override
+- [x] Add per-IP rate-limiting middleware to `tether/control-plane` REST API — 300 req/min default, `TETHER_RATE_LIMIT` env override
 
 ### Telemetry
 
-- [ ] Add HTTP request metrics middleware to `scope/backend/cmd/backend` — expose `tpt_http_requests_total{method,path,status}`, `tpt_http_request_duration_seconds` histogram, and `tpt_http_inflight_requests` gauge on `/metrics`
-- [ ] Add HTTP request metrics middleware to `scope/backend/cmd/ingest` — extend existing `prometheus.go` with the same three HTTP-layer metrics (distinct from the existing ingestion-count counters)
-- [ ] Add lightweight Prometheus-format `/metrics` endpoint to `frontier/control-plane` — request count, latency histogram, in-flight gauge; no new Go module dependencies (hand-rolled text format + atomic counters)
-- [ ] Add lightweight Prometheus-format `/metrics` endpoint to `tether/control-plane` — same approach as Frontier; expose on same port as REST API
+- [x] Add HTTP request metrics middleware to `scope/backend/cmd/backend` — expose `tpt_http_requests_total{method,path,status}`, `tpt_http_request_duration_seconds` histogram, and `tpt_http_inflight_requests` gauge on `/metrics`
+- [x] Add HTTP request metrics middleware to `scope/backend/cmd/ingest` — extend existing `prometheus.go` with the same three HTTP-layer metrics (distinct from the existing ingestion-count counters)
+- [x] Add lightweight Prometheus-format `/metrics` endpoint to `frontier/control-plane` — request count, latency histogram, in-flight gauge; no new Go module dependencies (hand-rolled text format + atomic counters)
+- [x] Add lightweight Prometheus-format `/metrics` endpoint to `tether/control-plane` — same approach as Frontier; expose on same port as REST API
 
 ### Dependency Reduction
 
-- [ ] Replace `k8s.io/client-go` + `k8s.io/api` + `k8s.io/apimachinery` in `tether/control-plane` with a custom `net/http` ConfigMap watcher (~100 lines) — HTTP long-poll `GET /api/v1/namespaces/{ns}/configmaps/{name}?watch=true`; remove the three k8s packages from `go.mod`
-- [ ] Replace `reqwest` in `frontier/proxy/Cargo.toml` with a direct Hyper 1.x client call in `frontier/proxy/src/plugins/jwt.rs` (`refresh_keys`) — proxy already imports Hyper; removes duplicate TLS stack and ~2 MB from the proxy binary
-- [ ] Replace `#[async_trait]` macro in `tether/proxy` and `chisel/core` with native async-fn-in-trait syntax (stable since Rust 1.75) — remove `async-trait = "0.1"` from both `Cargo.toml` files
-- [ ] Replace `parking_lot::RwLock` with `tokio::sync::RwLock` in async call sites within `frontier/proxy/src/plugins/jwt.rs` and `frontier/proxy/src/tls.rs` — eliminates blocking-lock risk on Tokio worker threads; pure-sync hot paths (`ratelimit.rs`) may keep `parking_lot::Mutex`
+- [x] Replace `k8s.io/client-go` + `k8s.io/api` + `k8s.io/apimachinery` in `tether/control-plane` with a custom `net/http` ConfigMap watcher (~100 lines) — HTTP long-poll `GET /api/v1/namespaces/{ns}/configmaps/{name}?watch=true`; remove the three k8s packages from `go.mod`
+- [x] Replace `reqwest` in `frontier/proxy/Cargo.toml` with a direct Hyper 1.x client call in `frontier/proxy/src/plugins/jwt.rs` (`refresh_keys`) — proxy already imports Hyper; removes duplicate TLS stack and ~2 MB from the proxy binary
+- [x] Replace `#[async_trait]` macro in `tether/proxy` and `chisel/core` with native async-fn-in-trait syntax (stable since Rust 1.75) — remove `async-trait = "0.1"` from both `Cargo.toml` files
+- [x] Replace `parking_lot::RwLock` with `tokio::sync::RwLock` in async call sites within `frontier/proxy/src/plugins/jwt.rs` and `frontier/proxy/src/tls.rs` — eliminates blocking-lock risk on Tokio worker threads; pure-sync hot paths (`ratelimit.rs`) may keep `parking_lot::Mutex`
 
 ### Frontend Completeness
 
-- [ ] Wire up `cytoscape` (already in `scope/dashboard/package.json`) in `ServiceGraph.tsx` — replace hand-written SVG grid with a Cytoscape `cose` force-directed layout; health-coloured nodes, arrowhead edges, zoom/pan
-- [ ] Wire up `recharts` (already in `scope/dashboard/package.json`) in `MetricsCharts.tsx` — replace SVG `<polyline>` with Recharts `<AreaChart>` / `<LineChart>`; add `<Tooltip>` and `<Legend>`; group series by metric name
+- [x] Wire up `cytoscape` (already in `scope/dashboard/package.json`) in `ServiceGraph.tsx` — replace hand-written SVG grid with a Cytoscape `cose` force-directed layout; health-coloured nodes, arrowhead edges, zoom/pan
+- [x] Wire up `recharts` (already in `scope/dashboard/package.json`) in `MetricsCharts.tsx` — replace SVG `<polyline>` with Recharts `<AreaChart>` / `<LineChart>`; add `<Tooltip>` and `<Legend>`; group series by metric name

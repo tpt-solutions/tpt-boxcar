@@ -7,7 +7,7 @@ import {
   PluginContext,
   continueResult,
   denyResult,
-} from "@tpt-cloud-native/frontier-plugin-sdk";
+} from "@tpt-boxcar/frontier-plugin-sdk";
 
 interface RateLimitEntry {
   count: number;

@@ -11,7 +11,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/tpt-cloud-native/frontier/control-plane/internal/store"
+	"github.com/tpt-boxcar/frontier/control-plane/internal/store"
 )
 
 type ConsulConfig struct {

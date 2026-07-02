@@ -4,7 +4,7 @@ import (
 	"log"
 	"sync"
 
-	"github.com/tpt-cloud-native/frontier/control-plane/internal/store"
+	"github.com/tpt-boxcar/frontier/control-plane/internal/store"
 
 	"google.golang.org/protobuf/types/known/anypb"
 )

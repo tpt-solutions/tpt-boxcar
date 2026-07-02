@@ -2,7 +2,7 @@ syntax = "proto3";
 
 package frontier.v1;
 
-option go_package = "github.com/tpt-cloud-native/frontier/control-plane/internal/pb/frontier/v1;frontierv1";
+option go_package = "github.com/tpt-boxcar/frontier/control-plane/internal/pb/frontier/v1;frontierv1";
 
 // Route defines a routing rule from a path prefix to an upstream cluster.
 message Route {

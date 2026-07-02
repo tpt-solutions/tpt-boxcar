@@ -8,7 +8,7 @@ import (
 	"github.com/ClickHouse/clickhouse-go/v2"
 	"github.com/ClickHouse/clickhouse-go/v2/lib/driver"
 
-	"github.com/tpt-cloud-native/scope/backend/internal/schema"
+	"github.com/tpt-boxcar/scope/backend/internal/schema"
 )
 
 // Writer writes internal schema records to ClickHouse via native protocol.

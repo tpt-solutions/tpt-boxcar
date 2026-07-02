@@ -1,4 +1,4 @@
-# TPT Cloud-Native
+# TPT Boxcar
 
 [![License](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](LICENSE)
 
@@ -6,7 +6,7 @@ An open-source, unified cloud-native tooling suite — from local development to
 
 ## Overview
 
-TPT Cloud-Native provides five integrated products that cover the full application lifecycle:
+TPT Boxcar provides five integrated products that cover the full application lifecycle:
 
 | Product | Description | Stack |
 |---------|-------------|-------|
@@ -20,7 +20,7 @@ TPT Cloud-Native provides five integrated products that cover the full applicati
 
 ```bash
 # 1. Clone the repo
-git clone https://github.com/tpt-solutions/tpt-cloud-native.git && cd tpt-cloud-native
+git clone https://github.com/tpt-solutions/tpt-boxcar.git && cd tpt-boxcar
 
 # 2. Build the Rust workspace
 cargo build --workspace
@@ -42,7 +42,7 @@ go build ./...
 ## Monorepo Structure
 
 ```
-tpt-cloud-native/
+tpt-boxcar/
 ├── origin/          # TPT Origin — local development sandbox
 │   ├── core/        #   Rust core engine
 │   ├── cli/         #   CLI binary

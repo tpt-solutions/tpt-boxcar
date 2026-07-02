@@ -19,10 +19,10 @@ import (
 	collectormetrics "go.opentelemetry.io/proto/otlp/collector/metrics/v1"
 	collectortrace "go.opentelemetry.io/proto/otlp/collector/trace/v1"
 
-	"github.com/tpt-cloud-native/scope/backend/internal/buffer"
-	"github.com/tpt-cloud-native/scope/backend/internal/clickhouse"
-	"github.com/tpt-cloud-native/scope/backend/internal/ratelimit"
-	"github.com/tpt-cloud-native/scope/backend/internal/schema"
+	"github.com/tpt-boxcar/scope/backend/internal/buffer"
+	"github.com/tpt-boxcar/scope/backend/internal/clickhouse"
+	"github.com/tpt-boxcar/scope/backend/internal/ratelimit"
+	"github.com/tpt-boxcar/scope/backend/internal/schema"
 )
 
 func main() {

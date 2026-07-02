@@ -1,4 +1,4 @@
-module github.com/tpt-cloud-native/scope/backend
+module github.com/tpt-boxcar/scope/backend
 
 go 1.22
 

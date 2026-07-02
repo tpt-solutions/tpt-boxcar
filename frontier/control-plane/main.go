@@ -13,14 +13,14 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/tpt-cloud-native/frontier/control-plane/internal/ratelimit"
+	"github.com/tpt-boxcar/frontier/control-plane/internal/ratelimit"
 
-	"github.com/tpt-cloud-native/frontier/control-plane/internal/configpush"
-	consulsync "github.com/tpt-cloud-native/frontier/control-plane/internal/consul"
-	grpcserver "github.com/tpt-cloud-native/frontier/control-plane/internal/grpc"
-	"github.com/tpt-cloud-native/frontier/control-plane/internal/rest"
-	"github.com/tpt-cloud-native/frontier/control-plane/internal/store"
-	"github.com/tpt-cloud-native/frontier/control-plane/internal/xds"
+	"github.com/tpt-boxcar/frontier/control-plane/internal/configpush"
+	consulsync "github.com/tpt-boxcar/frontier/control-plane/internal/consul"
+	grpcserver "github.com/tpt-boxcar/frontier/control-plane/internal/grpc"
+	"github.com/tpt-boxcar/frontier/control-plane/internal/rest"
+	"github.com/tpt-boxcar/frontier/control-plane/internal/store"
+	"github.com/tpt-boxcar/frontier/control-plane/internal/xds"
 )
 
 func main() {

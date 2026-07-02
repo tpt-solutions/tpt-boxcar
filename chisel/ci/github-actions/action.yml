@@ -1,6 +1,6 @@
 name: "TPT Chisel — Image Distiller"
 description: "Analyze and distill Docker images to minimal distroless containers"
-author: "tpt-cloud-native"
+author: "tpt-boxcar"
 branding:
   icon: "scissors"
   color: "blue"
@@ -28,7 +28,7 @@ inputs:
 
 runs:
   using: "docker"
-  image: "ghcr.io/tpt-cloud-native/chisel:latest"
+  image: "ghcr.io/tpt-boxcar/chisel:latest"
   args:
     - "distill"
     - "--image"

@@ -3,7 +3,7 @@ use std::collections::HashMap;
 use anyhow::Result;
 use http_body_util::{BodyExt, Empty};
 use hyper::{Request, StatusCode};
-use hyper_rustls::HttpsConnector;
+use hyper_rustls::HttpsConnectorBuilder;
 use hyper_util::client::legacy::Client;
 use hyper_util::rt::TokioExecutor;
 use jsonwebtoken::{decode, decode_header, DecodingKey, Validation};
@@ -81,7 +81,12 @@ impl JwtValidator {
         let url = self.config.jwks_url.parse::<hyper::Uri>()
             .map_err(|e| anyhow::anyhow!("invalid JWKS URL: {e}"))?;
 
-        let https = HttpsConnector::new();
+        let https = HttpsConnectorBuilder::new()
+            .with_native_roots()
+            .map_err(|e| anyhow::anyhow!("failed to load native roots: {e}"))?
+            .https_only()
+            .enable_http1()
+            .build();
         let client: Client<_, Empty<hyper::body::Bytes>> = Client::builder(TokioExecutor::new())
             .build(https);
 

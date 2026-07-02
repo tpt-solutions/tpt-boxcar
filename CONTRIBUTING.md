@@ -1,4 +1,4 @@
-# Contributing to TPT Cloud-Native
+# Contributing to TPT Boxcar
 
 Thank you for your interest in contributing! This document covers how to set up your development environment and the conventions for branches, commits, and pull requests.
 
@@ -20,8 +20,8 @@ Thank you for your interest in contributing! This document covers how to set up 
 
 ```bash
 # Clone the repository
-git clone https://github.com/tpt-solutions/tpt-cloud-native.git
-cd tpt-cloud-native
+git clone https://github.com/tpt-solutions/tpt-boxcar.git
+cd tpt-boxcar
 
 # Build the entire Rust workspace (all seven crates)
 cargo build --workspace

@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Repository Overview
 
-TPT Cloud-Native is a monorepo of five integrated open-source products covering the full application lifecycle from local dev to edge deployment. The repo uses a Cargo workspace for all Rust crates and a Go workspace (`go.work`) for all Go modules.
+TPT Boxcar is a monorepo of five integrated open-source products covering the full application lifecycle from local dev to edge deployment. The repo uses a Cargo workspace for all Rust crates and a Go workspace (`go.work`) for all Go modules.
 
 **Products:**
 - **Origin** — Unified local sandbox (OCI containers + Wasm modules via containerd + Wasmtime, eBPF networking)

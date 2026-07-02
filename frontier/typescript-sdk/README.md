@@ -1,11 +1,11 @@
-# @tpt-cloud-native/frontier-plugin-sdk
+# @tpt-boxcar/frontier-plugin-sdk
 
 TypeScript SDK for building TPT Frontier Wasm plugins.
 
 ## Installation
 
 ```bash
-npm install @tpt-cloud-native/frontier-plugin-sdk
+npm install @tpt-boxcar/frontier-plugin-sdk
 ```
 
 ## Quick Start
@@ -20,7 +20,7 @@ import {
   PluginContext,
   continueResult,
   denyResult,
-} from "@tpt-cloud-native/frontier-plugin-sdk";
+} from "@tpt-boxcar/frontier-plugin-sdk";
 
 const plugin: FrontierPlugin = {
   init(host: HostFunctions) {

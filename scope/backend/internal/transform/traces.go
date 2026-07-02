@@ -8,7 +8,7 @@ import (
 	commonpb "go.opentelemetry.io/proto/otlp/common/v1"
 	tracepb "go.opentelemetry.io/proto/otlp/trace/v1"
 
-	"github.com/tpt-cloud-native/scope/backend/internal/schema"
+	"github.com/tpt-boxcar/scope/backend/internal/schema"
 )
 
 // SpanToRecord converts an OTLP span plus resource attributes into a TraceRecord.

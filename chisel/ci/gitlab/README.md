@@ -6,7 +6,7 @@
 
 ```yaml
 include:
-  - component: tpt-cloud-native/chisel/distill@v1
+  - component: tpt-boxcar/chisel/distill@v1
 
 chisel-distill:
   variables:
@@ -17,7 +17,7 @@ chisel-distill:
 
 ```yaml
 include:
-  - component: tpt-cloud-native/chisel/distill@v1
+  - component: tpt-boxcar/chisel/distill@v1
 
 chisel-distill:
   variables:
@@ -43,7 +43,7 @@ build-image:
 distill-image:
   stage: distill
   include:
-    - component: tpt-cloud-native/chisel/distill@v1
+    - component: tpt-boxcar/chisel/distill@v1
   variables:
     IMAGE: myapp:$CI_COMMIT_SHA
 

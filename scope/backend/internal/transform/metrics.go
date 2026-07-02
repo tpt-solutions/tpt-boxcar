@@ -7,7 +7,7 @@ import (
 	commonpb "go.opentelemetry.io/proto/otlp/common/v1"
 	metricpb "go.opentelemetry.io/proto/otlp/metrics/v1"
 
-	"github.com/tpt-cloud-native/scope/backend/internal/schema"
+	"github.com/tpt-boxcar/scope/backend/internal/schema"
 )
 
 // MetricToRecords converts an OTLP Metric plus resource attributes into one or more MetricRecords.

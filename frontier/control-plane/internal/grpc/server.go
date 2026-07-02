@@ -8,7 +8,7 @@ import (
 	"net"
 	"sync"
 
-	"github.com/tpt-cloud-native/frontier/control-plane/internal/store"
+	"github.com/tpt-boxcar/frontier/control-plane/internal/store"
 
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"

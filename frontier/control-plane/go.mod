@@ -1,4 +1,4 @@
-module github.com/tpt-cloud-native/frontier/control-plane
+module github.com/tpt-boxcar/frontier/control-plane
 
 go 1.22
 

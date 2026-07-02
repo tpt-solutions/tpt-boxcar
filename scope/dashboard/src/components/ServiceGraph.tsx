@@ -1,4 +1,5 @@
-import { useState, useEffect } from "react";
+import { useEffect, useRef, useState } from "react";
+import cytoscape from "cytoscape";
 import { getServices } from "../api/client";
 import type { ServiceNode } from "../api/types";
 import { useRefreshInterval } from "./RefreshPicker";
@@ -9,16 +10,22 @@ const HEALTH_COLOR: Record<string, string> = {
   down: "#f85149",
 };
 
-function layoutNodes(nodes: ServiceNode[]): { x: number; y: number; node: ServiceNode }[] {
-  const positions = nodes.map((node, i) => ({
-    x: 120 + (i % 3) * 160,
-    y: 80 + Math.floor(i / 3) * 120,
-    node,
+function toElements(services: ServiceNode[]): cytoscape.ElementDefinition[] {
+  const names = new Set(services.map((s) => s.name));
+  const nodes: cytoscape.ElementDefinition[] = services.map((s) => ({
+    data: { id: s.name, label: s.name, health: s.health },
   }));
-  return positions;
+  const edges: cytoscape.ElementDefinition[] = services.flatMap((s) =>
+    s.dependencies
+      .filter((dep) => names.has(dep))
+      .map((dep) => ({ data: { id: `${s.name}->${dep}`, source: s.name, target: dep } }))
+  );
+  return [...nodes, ...edges];
 }
 
 export default function ServiceGraph() {
+  const containerRef = useRef<HTMLDivElement>(null);
+  const cyRef = useRef<cytoscape.Core | null>(null);
   const [services, setServices] = useState<ServiceNode[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -42,50 +49,73 @@ export default function ServiceGraph() {
     return () => clearInterval(id);
   }, [interval]);
 
-  if (loading) return <div style={{ padding: "2rem", color: "#666" }}>Loading...</div>;
-  if (error) return <div style={{ padding: "2rem", color: "#f85149" }}>Error: {error}</div>;
+  useEffect(() => {
+    if (!containerRef.current) return;
 
-  const positioned = layoutNodes(services);
+    const cy = cytoscape({
+      container: containerRef.current,
+      elements: [],
+      style: [
+        {
+          selector: "node",
+          style: {
+            "background-color": (ele: cytoscape.NodeSingular) => HEALTH_COLOR[ele.data("health")] ?? "#666",
+            "background-opacity": 0.25,
+            "border-color": (ele: cytoscape.NodeSingular) => HEALTH_COLOR[ele.data("health")] ?? "#666",
+            "border-width": 2,
+            label: "data(label)",
+            color: "#c9d1d9",
+            "font-size": 12,
+            "font-family": "monospace",
+            "text-valign": "center",
+            "text-halign": "center",
+            width: 48,
+            height: 48,
+          },
+        },
+        {
+          selector: "edge",
+          style: {
+            width: 2,
+            "line-color": "#555",
+            "target-arrow-color": "#555",
+            "target-arrow-shape": "triangle",
+            "curve-style": "bezier",
+          },
+        },
+      ],
+      layout: { name: "cose" },
+      minZoom: 0.2,
+      maxZoom: 3,
+      wheelSensitivity: 0.2,
+    });
+
+    cyRef.current = cy;
+
+    return () => {
+      cy.destroy();
+      cyRef.current = null;
+    };
+  }, []);
+
+  useEffect(() => {
+    const cy = cyRef.current;
+    if (!cy) return;
+
+    cy.elements().remove();
+    cy.add(toElements(services));
+    cy.layout({ name: "cose", animate: false }).run();
+  }, [services]);
 
   return (
     <div>
       <h2>Service Dependency Graph</h2>
-      <svg width="600" height="500" style={{ border: "1px solid #333", borderRadius: 8, background: "#0d1117" }}>
-        {positioned.map((a) =>
-          a.node.dependencies
-            .map((dep) => positioned.find((b) => b.node.name === dep))
-            .filter(Boolean)
-            .map((b) => {
-              const dx = b!.x - a.x;
-              const dy = b!.y - a.y;
-              const dist = Math.sqrt(dx * dx + dy * dy);
-              const offset = 25;
-              return (
-                <line
-                  key={`${a.node.name}-${b!.node.name}`}
-                  x1={a.x + (dx / dist) * offset}
-                  y1={a.y + (dy / dist) * offset}
-                  x2={b!.x - (dx / dist) * offset}
-                  y2={b!.y - (dy / dist) * offset}
-                  stroke="#555"
-                  strokeWidth={2}
-                  markerEnd="url(#arrowhead)"
-                />
-              );
-            })
-        )}
-        <defs>
-          <marker id="arrowhead" markerWidth="10" markerHeight="7" refX="10" refY="3.5" orient="auto">
-            <polygon points="0 0, 10 3.5, 0 7" fill="#555" />
-          </marker>
-        </defs>
-        {positioned.map((p) => (
-          <g key={p.node.name}>
-            <circle cx={p.x} cy={p.y} r={22} fill={HEALTH_COLOR[p.node.health] ?? "#666"} fillOpacity={0.25} stroke={HEALTH_COLOR[p.node.health] ?? "#666"} strokeWidth={2} />
-            <text x={p.x} y={p.y + 4} textAnchor="middle" fill="#c9d1d9" fontSize={12} fontFamily="monospace">{p.node.name}</text>
-          </g>
-        ))}
-      </svg>
+      {error && <div style={{ color: "#f85149", marginBottom: "0.5rem" }}>Error: {error}</div>}
+      {loading && !error && <div style={{ color: "#666", marginBottom: "0.5rem" }}>Loading...</div>}
+      <div
+        ref={containerRef}
+        style={{ width: 600, height: 500, border: "1px solid #333", borderRadius: 8, background: "#0d1117" }}
+      />
     </div>
   );
 }

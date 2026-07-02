@@ -31,7 +31,7 @@ chisel wasm-migrate --image myapp:latest --output myapp.wasm
 ### GitHub Actions
 
 ```yaml
-- uses: tpt-cloud-native/chisel@v1
+- uses: tpt-boxcar/chisel@v1
   with:
     image: myapp:latest
     scan-cve: "true"
@@ -41,7 +41,7 @@ chisel wasm-migrate --image myapp:latest --output myapp.wasm
 
 ```yaml
 include:
-  - component: tpt-cloud-native/chisel/distill@v1
+  - component: tpt-boxcar/chisel/distill@v1
 
 chisel-distill:
   variables:

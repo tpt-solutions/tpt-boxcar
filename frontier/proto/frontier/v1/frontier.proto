@@ -4,7 +4,7 @@ package frontier.v1;
 
 import "types.proto";
 
-option go_package = "github.com/tpt-cloud-native/frontier/control-plane/internal/pb/frontier/v1;frontierv1";
+option go_package = "github.com/tpt-boxcar/frontier/control-plane/internal/pb/frontier/v1;frontierv1";
 
 // FrontierConfig is the control-plane gRPC service exposed to data-plane proxies.
 service FrontierConfig {

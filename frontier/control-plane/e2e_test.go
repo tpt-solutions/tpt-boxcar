@@ -8,8 +8,8 @@ import (
 	"net/http/httptest"
 	"testing"
 
-	"github.com/tpt-cloud-native/frontier/control-plane/internal/rest"
-	"github.com/tpt-cloud-native/frontier/control-plane/internal/store"
+	"github.com/tpt-boxcar/frontier/control-plane/internal/rest"
+	"github.com/tpt-boxcar/frontier/control-plane/internal/store"
 )
 
 func TestControlPlaneE2E(t *testing.T) {

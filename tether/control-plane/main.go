@@ -11,7 +11,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/tpt-cloud-native/tether/control-plane/internal/ratelimit"
+	"github.com/tpt-boxcar/tether/control-plane/internal/ratelimit"
 )
 
 // apiKeyMiddleware returns 401 if the X-API-Key header is missing or doesn't

@@ -1,7 +1,7 @@
 use anyhow::Result;
 use http_body_util::{BodyExt, Full};
 use hyper::{body::Bytes, Request};
-use hyper_rustls::HttpsConnector;
+use hyper_rustls::HttpsConnectorBuilder;
 use hyper_util::client::legacy::Client;
 use hyper_util::rt::TokioExecutor;
 use serde_json::json;
@@ -43,7 +43,12 @@ impl LlmProvider for OpenAiProvider {
 
         let url = format!("{}/v1/chat/completions", self.base_url);
 
-        let https = HttpsConnector::with_native_roots();
+        let https = HttpsConnectorBuilder::new()
+            .with_native_roots()
+            .map_err(|e| LlmError::Network(format!("failed to load native roots: {e}")))?
+            .https_only()
+            .enable_http1()
+            .build();
         let client: Client<_, Full<Bytes>> = Client::builder(TokioExecutor::new())
             .build(https);
 
@@ -87,7 +92,7 @@ impl LlmProvider for OpenAiProvider {
         let mut resp = resp;
         while let Some(next) = resp.frame().await {
             let frame = next.map_err(|e| LlmError::Network(format!("stream read error: {e}")))?;
-            if let Some(data) = frame.into_data().ok() {
+            if let Ok(data) = frame.into_data() {
                 buffer.push_str(&String::from_utf8_lossy(&data));
             }
 

@@ -1,22 +1,61 @@
 import { useState, useEffect } from "react";
+import {
+  ResponsiveContainer,
+  AreaChart,
+  Area,
+  LineChart,
+  Line,
+  XAxis,
+  YAxis,
+  CartesianGrid,
+  Tooltip,
+  Legend,
+} from "recharts";
 import { getMetrics } from "../api/client";
 import type { MetricSeries } from "../api/types";
 import { useRefreshInterval } from "./RefreshPicker";
 
-function MiniLineChart({ series, color }: { series: MetricSeries; color: string }) {
-  if (!series.points.length) return <div style={{ height: 150, background: "#1a1a2e", borderRadius: 4 }} />;
-  const maxVal = Math.max(...series.points.map((p) => p.value));
-  const minVal = Math.min(...series.points.map((p) => p.value));
-  const range = maxVal - minVal || 1;
-  const w = 500;
-  const h = 150;
-  const points = series.points
-    .map((p, i) => `${(i / (series.points.length - 1)) * w},${h - ((p.value - minVal) / range) * (h - 20) - 10}`)
-    .join(" ");
+const CHARTS: { title: string; color: string; kind: "area" | "line" }[] = [
+  { title: "Latency", color: "#4a90d9", kind: "area" },
+  { title: "Throughput", color: "#2ecc71", kind: "area" },
+  { title: "Error Rate", color: "#f85149", kind: "line" },
+  { title: "Connections", color: "#d29922", kind: "area" },
+];
+
+function formatTime(ts: number) {
+  return new Date(ts).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" });
+}
+
+function MetricChart({ series, color, kind }: { series: MetricSeries; color: string; kind: "area" | "line" }) {
+  if (!series.points.length) {
+    return <div style={{ height: 150, background: "#1a1a2e", borderRadius: 4 }} />;
+  }
+
+  const data = series.points.map((p) => ({ timestamp: p.timestamp, value: p.value }));
+  const tooltipStyle = { background: "#1a1a2e", border: "1px solid #333", fontSize: "0.8rem" };
+
   return (
-    <svg width="100%" viewBox={`0 0 ${w} ${h}`} style={{ background: "#1a1a2e", borderRadius: 4 }}>
-      <polyline fill="none" stroke={color} strokeWidth={2} points={points} />
-    </svg>
+    <ResponsiveContainer width="100%" height={150}>
+      {kind === "area" ? (
+        <AreaChart data={data}>
+          <CartesianGrid strokeDasharray="3 3" stroke="#2a2a3e" />
+          <XAxis dataKey="timestamp" tickFormatter={formatTime} stroke="#666" fontSize={11} />
+          <YAxis stroke="#666" fontSize={11} width={40} />
+          <Tooltip labelFormatter={(v) => formatTime(Number(v))} contentStyle={tooltipStyle} />
+          <Legend />
+          <Area type="monotone" dataKey="value" name={series.name} stroke={color} fill={color} fillOpacity={0.25} />
+        </AreaChart>
+      ) : (
+        <LineChart data={data}>
+          <CartesianGrid strokeDasharray="3 3" stroke="#2a2a3e" />
+          <XAxis dataKey="timestamp" tickFormatter={formatTime} stroke="#666" fontSize={11} />
+          <YAxis stroke="#666" fontSize={11} width={40} />
+          <Tooltip labelFormatter={(v) => formatTime(Number(v))} contentStyle={tooltipStyle} />
+          <Legend />
+          <Line type="monotone" dataKey="value" name={series.name} stroke={color} dot={false} />
+        </LineChart>
+      )}
+    </ResponsiveContainer>
   );
 }
 
@@ -47,26 +86,26 @@ export default function MetricsCharts() {
   if (loading) return <div style={{ padding: "2rem", color: "#666" }}>Loading...</div>;
   if (error) return <div style={{ padding: "2rem", color: "#f85149" }}>Error: {error}</div>;
 
-  const charts = [
-    { title: "Latency", color: "#4a90d9" },
-    { title: "Throughput", color: "#2ecc71" },
-    { title: "Error Rate", color: "#f85149" },
-    { title: "Connections", color: "#d29922" },
-  ];
+  // Group series by metric name so charts stay stable regardless of API ordering.
+  const byName = new Map<string, MetricSeries>();
+  for (const s of metrics) byName.set(s.name, s);
 
   return (
     <div>
       <h2>Metrics</h2>
       <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "1rem" }}>
-        {charts.map((c, i) => (
-          <div key={c.title} style={{ border: "1px solid #333", borderRadius: 8, padding: "1rem" }}>
-            <h3>{c.title}</h3>
-            <p style={{ color: "#999", fontSize: "0.85rem" }}>
-              {metrics[i]?.points.length ? `${metrics[i].points.length} data points` : "No data"}
-            </p>
-            <MiniLineChart series={metrics[i] ?? { name: c.title, points: [] }} color={c.color} />
-          </div>
-        ))}
+        {CHARTS.map((c) => {
+          const series = byName.get(c.title) ?? { name: c.title, points: [] };
+          return (
+            <div key={c.title} style={{ border: "1px solid #333", borderRadius: 8, padding: "1rem" }}>
+              <h3>{c.title}</h3>
+              <p style={{ color: "#999", fontSize: "0.85rem" }}>
+                {series.points.length ? `${series.points.length} data points` : "No data"}
+              </p>
+              <MetricChart series={series} color={c.color} kind={c.kind} />
+            </div>
+          );
+        })}
       </div>
     </div>
   );

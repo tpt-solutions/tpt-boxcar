@@ -8,7 +8,7 @@ import (
 	"net/http"
 	"os"
 
-	"github.com/tpt-cloud-native/frontier/control-plane/internal/store"
+	"github.com/tpt-boxcar/frontier/control-plane/internal/store"
 )
 
 // Handler provides REST CRUD endpoints for Frontier config using Go 1.22 ServeMux.

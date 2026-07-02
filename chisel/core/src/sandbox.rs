@@ -83,7 +83,6 @@ pub enum SandboxStatus {
     Failed,
 }
 
-#[async_trait]
 pub trait SandboxProvider: Send + Sync {
     async fn start_sandbox(&self, config: &SandboxConfig) -> Result<SandboxInfo>;
     async fn stop_sandbox(&self, sandbox_id: &str) -> Result<()>;
@@ -150,7 +149,6 @@ impl Default for SandboxRunner {
     }
 }
 
-#[async_trait]
 impl SandboxProvider for SandboxRunner {
     async fn start_sandbox(&self, config: &SandboxConfig) -> Result<SandboxInfo> {
         let sandbox_id = Uuid::new_v4().to_string();

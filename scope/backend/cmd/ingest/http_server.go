@@ -13,9 +13,9 @@ import (
 	collectormetrics "go.opentelemetry.io/proto/otlp/collector/metrics/v1"
 	collectorlogs "go.opentelemetry.io/proto/otlp/collector/logs/v1"
 
-	"github.com/tpt-cloud-native/scope/backend/internal/buffer"
-	"github.com/tpt-cloud-native/scope/backend/internal/schema"
-	"github.com/tpt-cloud-native/scope/backend/internal/transform"
+	"github.com/tpt-boxcar/scope/backend/internal/buffer"
+	"github.com/tpt-boxcar/scope/backend/internal/schema"
+	"github.com/tpt-boxcar/scope/backend/internal/transform"
 )
 
 type httpServer struct {

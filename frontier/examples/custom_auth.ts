@@ -8,7 +8,7 @@ import {
   continueResult,
   denyResult,
   jsonResponse,
-} from "@tpt-cloud-native/frontier-plugin-sdk";
+} from "@tpt-boxcar/frontier-plugin-sdk";
 
 interface AuthConfig {
   apiKeyHeader: string;

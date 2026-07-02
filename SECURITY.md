@@ -2,10 +2,10 @@
 
 ## Vulnerability Reporting
 
-If you discover a security vulnerability in TPT Cloud Native, please report it responsibly:
+If you discover a security vulnerability in TPT Boxcar, please report it responsibly:
 
 1. **Do not** open a public GitHub issue for security vulnerabilities.
-2. Email security reports to: `security@tpt-cloud-native.dev` (or the maintainer's private email).
+2. Email security reports to: `security@tpt-boxcar.dev` (or the maintainer's private email).
 3. Include:
    - Description of the vulnerability
    - Steps to reproduce

@@ -2,13 +2,13 @@
 
 /** @type {import('@docusaurus/types').Config} */
 const config = {
-  title: 'TPT Cloud-Native',
+  title: 'TPT Boxcar',
   tagline: 'Open source tooling from local dev to the edge',
   favicon: 'img/favicon.ico',
-  url: 'https://docs.tpt-cloud-native.dev',
+  url: 'https://docs.tpt-boxcar.dev',
   baseUrl: '/',
-  organizationName: 'tpt-cloud-native',
-  projectName: 'tpt-cloud-native',
+  organizationName: 'tpt-boxcar',
+  projectName: 'tpt-boxcar',
   onBrokenLinks: 'throw',
   onBrokenMarkdownLinks: 'warn',
 
@@ -37,14 +37,14 @@ const config = {
     /** @type {import('@docusaurus/preset-classic').ThemeConfig} */
     ({
       navbar: {
-        title: 'TPT Cloud-Native',
+        title: 'TPT Boxcar',
         items: [
           { type: 'docSidebar', sidebarId: 'originSidebar', position: 'left', label: 'Origin' },
           { type: 'docSidebar', sidebarId: 'tetherSidebar', position: 'left', label: 'Tether' },
           { type: 'docSidebar', sidebarId: 'scopeSidebar', position: 'left', label: 'Scope' },
           { type: 'docSidebar', sidebarId: 'chiselSidebar', position: 'left', label: 'Chisel' },
           { type: 'docSidebar', sidebarId: 'frontierSidebar', position: 'left', label: 'Frontier' },
-          { href: 'https://github.com/tpt-cloud-native/tpt-cloud-native', label: 'GitHub' },
+          { href: 'https://github.com/tpt-boxcar/tpt-boxcar', label: 'GitHub' },
         ],
       },
       footer: {
@@ -58,15 +58,15 @@ const config = {
             { label: 'Frontier', to: '/frontier/' },
           ]},
           { title: 'Community', items: [
-            { label: 'GitHub', href: 'https://github.com/tpt-cloud-native/tpt-cloud-native' },
-            { label: 'Discussions', href: 'https://github.com/tpt-cloud-native/tpt-cloud-native/discussions' },
+            { label: 'GitHub', href: 'https://github.com/tpt-boxcar/tpt-boxcar' },
+            { label: 'Discussions', href: 'https://github.com/tpt-boxcar/tpt-boxcar/discussions' },
           ]},
           { title: 'More', items: [
-            { label: 'Contributing', href: 'https://github.com/tpt-cloud-native/tpt-cloud-native/blob/main/CONTRIBUTING.md' },
-            { label: 'Apache 2.0 License', href: 'https://github.com/tpt-cloud-native/tpt-cloud-native/blob/main/LICENSE' },
+            { label: 'Contributing', href: 'https://github.com/tpt-boxcar/tpt-boxcar/blob/main/CONTRIBUTING.md' },
+            { label: 'Apache 2.0 License', href: 'https://github.com/tpt-boxcar/tpt-boxcar/blob/main/LICENSE' },
           ]},
         ],
-        copyright: `Copyright ${new Date().getFullYear()} TPT Cloud-Native Contributors. Built with Docusaurus.`,
+        copyright: `Copyright ${new Date().getFullYear()} TPT Boxcar Contributors. Built with Docusaurus.`,
       },
     }),
 };

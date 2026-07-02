@@ -4,7 +4,7 @@ use std::path::PathBuf;
 #[derive(Parser)]
 #[command(
     name = "tpt",
-    about = "TPT Cloud-Native — Unified local sandbox for OCI + Wasm",
+    about = "TPT Boxcar — Unified local sandbox for OCI + Wasm",
     version,
     long_about = "TPT Origin spins up a mix of traditional containers and Wasm microservices from a single manifest, with zero-config networking."
 )]
@@ -86,7 +86,7 @@ async fn cmd_init(dir: &PathBuf) -> anyhow::Result<()> {
     }
 
     let template = r#"# TPT Origin Manifest
-# Docs: https://github.com/tpt-cloud-native/tpt-cloud-native/blob/main/docs/origin/manifest.md
+# Docs: https://github.com/tpt-boxcar/tpt-boxcar/blob/main/docs/origin/manifest.md
 
 name: my-app
 version: "1.0"

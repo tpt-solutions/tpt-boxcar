@@ -1,3 +1,3 @@
-module github.com/tpt-cloud-native/tether/control-plane
+module github.com/tpt-boxcar/tether/control-plane
 
 go 1.22.0
