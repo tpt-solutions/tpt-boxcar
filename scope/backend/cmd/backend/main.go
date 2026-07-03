@@ -45,6 +45,13 @@ type LogEntry struct {
 	Message  string `json:"message"`
 }
 
+type ServiceNode struct {
+	Name         string   `json:"name"`
+	Health       string   `json:"health"`
+	Type         string   `json:"type"`
+	Dependencies []string `json:"dependencies"`
+}
+
 type WasmModule struct {
 	Name            string `json:"name"`
 	CompileTime     string `json:"compileTime"`
@@ -126,19 +133,40 @@ func apiKeyMiddleware(next http.HandlerFunc) http.HandlerFunc {
 
 // --- Handlers ---
 
+// queryWindow parses the `since` query param (a Go duration string, e.g.
+// "15m", "1h") into an INTERVAL clause bound, defaulting to defaultWindow.
+func queryWindow(r *http.Request, defaultWindow time.Duration) time.Duration {
+	if raw := r.URL.Query().Get("since"); raw != "" {
+		if d, err := time.ParseDuration(raw); err == nil && d > 0 {
+			return d
+		}
+	}
+	return defaultWindow
+}
+
 func (qs *QueryServer) handleTraces(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := context.WithTimeout(r.Context(), 10*time.Second)
 	defer cancel()
 
-	rows, err := qs.db.Query(ctx, `
+	window := queryWindow(r, time.Hour)
+	service := r.URL.Query().Get("service")
+
+	query := `
 		SELECT span_id, operation_name, service_name,
 		       toUnixTimestamp64Milli(start_time) AS start_ms,
 		       duration_ns / 1000000.0            AS duration_ms,
 		       parent_span_id
 		FROM scope_traces
-		ORDER BY start_time DESC
-		LIMIT 200
-	`)
+		WHERE start_time >= now() - toIntervalSecond(?)
+	`
+	args := []any{int64(window.Seconds())}
+	if service != "" {
+		query += " AND service_name = ?"
+		args = append(args, service)
+	}
+	query += " ORDER BY start_time DESC LIMIT 200"
+
+	rows, err := qs.db.Query(ctx, query, args...)
 	if err != nil {
 		http.Error(w, `{"error":"query failed"}`, http.StatusInternalServerError)
 		log.Printf("traces query: %v", err)
@@ -166,15 +194,24 @@ func (qs *QueryServer) handleMetrics(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := context.WithTimeout(r.Context(), 10*time.Second)
 	defer cancel()
 
-	rows, err := qs.db.Query(ctx, `
+	window := queryWindow(r, time.Hour)
+	service := r.URL.Query().Get("service")
+
+	query := `
 		SELECT metric_name,
 		       toUnixTimestamp64Milli(timestamp) AS ts,
 		       value
 		FROM scope_metrics
-		WHERE timestamp >= now() - INTERVAL 1 HOUR
-		ORDER BY metric_name, timestamp ASC
-		LIMIT 10000
-	`)
+		WHERE timestamp >= now() - toIntervalSecond(?)
+	`
+	args := []any{int64(window.Seconds())}
+	if service != "" {
+		query += " AND service_name = ?"
+		args = append(args, service)
+	}
+	query += " ORDER BY metric_name, timestamp ASC LIMIT 10000"
+
+	rows, err := qs.db.Query(ctx, query, args...)
 	if err != nil {
 		http.Error(w, `{"error":"query failed"}`, http.StatusInternalServerError)
 		log.Printf("metrics query: %v", err)
@@ -209,12 +246,22 @@ func (qs *QueryServer) handleLogs(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := context.WithTimeout(r.Context(), 10*time.Second)
 	defer cancel()
 
-	rows, err := qs.db.Query(ctx, `
+	window := queryWindow(r, time.Hour)
+	service := r.URL.Query().Get("service")
+
+	query := `
 		SELECT timestamp, service_name, level, message
 		FROM scope_logs
-		ORDER BY timestamp DESC
-		LIMIT 500
-	`)
+		WHERE timestamp >= now() - toIntervalSecond(?)
+	`
+	args := []any{int64(window.Seconds())}
+	if service != "" {
+		query += " AND service_name = ?"
+		args = append(args, service)
+	}
+	query += " ORDER BY timestamp DESC LIMIT 500"
+
+	rows, err := qs.db.Query(ctx, query, args...)
 	if err != nil {
 		http.Error(w, `{"error":"query failed"}`, http.StatusInternalServerError)
 		log.Printf("logs query: %v", err)
@@ -291,6 +338,126 @@ func (qs *QueryServer) handleLogsStream(w http.ResponseWriter, r *http.Request) 
 			flusher.Flush()
 		}
 	}
+}
+
+// handleServices derives the service dependency graph shown by the dashboard
+// from recent trace parent/child relationships, and marks each service's
+// health from its recent log error rate.
+func (qs *QueryServer) handleServices(w http.ResponseWriter, r *http.Request) {
+	ctx, cancel := context.WithTimeout(r.Context(), 10*time.Second)
+	defer cancel()
+
+	names := make(map[string]struct{})
+	deps := make(map[string]map[string]struct{})
+
+	traceRows, err := qs.db.Query(ctx, `
+		SELECT DISTINCT child.service_name, parent.service_name
+		FROM scope_traces AS child
+		INNER JOIN scope_traces AS parent ON child.parent_span_id = parent.span_id
+		WHERE child.start_time >= now() - INTERVAL 1 HOUR
+		  AND child.service_name != parent.service_name
+		LIMIT 1000
+	`)
+	if err != nil {
+		http.Error(w, `{"error":"query failed"}`, http.StatusInternalServerError)
+		log.Printf("services (dependencies) query: %v", err)
+		return
+	}
+	for traceRows.Next() {
+		var childSvc, parentSvc string
+		if err := traceRows.Scan(&childSvc, &parentSvc); err != nil {
+			continue
+		}
+		names[childSvc] = struct{}{}
+		names[parentSvc] = struct{}{}
+		if deps[childSvc] == nil {
+			deps[childSvc] = make(map[string]struct{})
+		}
+		deps[childSvc][parentSvc] = struct{}{}
+	}
+	traceRows.Close()
+
+	// Include services that only appear as span roots or in logs/metrics so
+	// isolated services still show up as graph nodes.
+	nameRows, err := qs.db.Query(ctx, `
+		SELECT DISTINCT service_name FROM scope_traces WHERE start_time >= now() - INTERVAL 1 HOUR
+		UNION DISTINCT
+		SELECT DISTINCT service_name FROM scope_logs WHERE timestamp >= now() - INTERVAL 1 HOUR
+		LIMIT 1000
+	`)
+	if err != nil {
+		http.Error(w, `{"error":"query failed"}`, http.StatusInternalServerError)
+		log.Printf("services (names) query: %v", err)
+		return
+	}
+	for nameRows.Next() {
+		var name string
+		if err := nameRows.Scan(&name); err != nil {
+			continue
+		}
+		names[name] = struct{}{}
+	}
+	nameRows.Close()
+
+	errorCounts := make(map[string]uint64)
+	errRows, err := qs.db.Query(ctx, `
+		SELECT service_name, count()
+		FROM scope_logs
+		WHERE timestamp >= now() - INTERVAL 5 MINUTE
+		  AND upper(level) IN ('ERROR', 'FATAL', 'CRITICAL')
+		GROUP BY service_name
+	`)
+	if err != nil {
+		http.Error(w, `{"error":"query failed"}`, http.StatusInternalServerError)
+		log.Printf("services (errors) query: %v", err)
+		return
+	}
+	for errRows.Next() {
+		var name string
+		var count uint64
+		if err := errRows.Scan(&name, &count); err != nil {
+			continue
+		}
+		errorCounts[name] = count
+	}
+	errRows.Close()
+
+	recentActivity := make(map[string]struct{})
+	activityRows, err := qs.db.Query(ctx, `
+		SELECT DISTINCT service_name FROM scope_logs WHERE timestamp >= now() - INTERVAL 5 MINUTE
+	`)
+	if err == nil {
+		for activityRows.Next() {
+			var name string
+			if err := activityRows.Scan(&name); err == nil {
+				recentActivity[name] = struct{}{}
+			}
+		}
+		activityRows.Close()
+	}
+
+	services := make([]ServiceNode, 0, len(names))
+	for name := range names {
+		health := "healthy"
+		if _, seenRecently := recentActivity[name]; !seenRecently {
+			health = "down"
+		} else if errorCounts[name] > 0 {
+			health = "degraded"
+		}
+
+		depNames := make([]string, 0, len(deps[name]))
+		for dep := range deps[name] {
+			depNames = append(depNames, dep)
+		}
+
+		services = append(services, ServiceNode{
+			Name:         name,
+			Health:       health,
+			Type:         "service",
+			Dependencies: depNames,
+		})
+	}
+	writeJSON(w, services)
 }
 
 func (qs *QueryServer) handleWasm(w http.ResponseWriter, r *http.Request) {
@@ -378,6 +545,7 @@ func main() {
 	}
 
 	mux := http.NewServeMux()
+	mux.HandleFunc("GET /api/v1/services", apiKeyMiddleware(qs.handleServices))
 	mux.HandleFunc("GET /api/v1/traces", apiKeyMiddleware(qs.handleTraces))
 	mux.HandleFunc("GET /api/v1/metrics", apiKeyMiddleware(qs.handleMetrics))
 	mux.HandleFunc("GET /api/v1/logs", apiKeyMiddleware(qs.handleLogs))

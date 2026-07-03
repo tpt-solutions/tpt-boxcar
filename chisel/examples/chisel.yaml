@@ -1,0 +1,28 @@
+# TPT Chisel AI configuration
+# Select which backend `chisel migrate --ai` / `chisel audit --ai` use.
+
+ai:
+  backend: local # or "cloud"
+
+  local:
+    provider: ollama
+    endpoint: http://localhost:11434
+    model: llama3
+
+  cloud:
+    provider: claude # or "openai", "openrouter"
+    model: claude-3-5-sonnet-20241022
+    # Read from this environment variable, never stored in the file.
+    api_key_env: ANTHROPIC_API_KEY
+    # Optional override; defaults depend on provider:
+    #   openai:     https://api.openai.com
+    #   openrouter: https://openrouter.ai/api
+    # base_url: https://api.openai.com
+
+# Example OpenRouter config (routes to any model OpenRouter hosts, using
+# OpenRouter's own namespaced model IDs):
+#
+# cloud:
+#   provider: openrouter
+#   model: anthropic/claude-3.5-sonnet
+#   api_key_env: OPENROUTER_API_KEY

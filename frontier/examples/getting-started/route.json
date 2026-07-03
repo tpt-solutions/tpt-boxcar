@@ -1,0 +1,7 @@
+{
+  "name": "api-route",
+  "prefix": "/api",
+  "cluster": "api-upstream",
+  "priority": 100,
+  "strip_prefix": true
+}

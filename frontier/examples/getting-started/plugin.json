@@ -1,0 +1,8 @@
+{
+  "name": "rate-limiter",
+  "type": "wasm",
+  "config": {
+    "module_path": "./frontier/examples/rate_limiter.ts",
+    "requests_per_minute": "300"
+  }
+}

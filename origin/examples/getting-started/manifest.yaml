@@ -1,0 +1,36 @@
+# TPT Origin Manifest
+# Docs: https://github.com/tpt-boxcar/tpt-boxcar/blob/main/docs/origin/manifest.md
+
+name: my-app
+version: "1.0"
+
+services:
+  # Example OCI container
+  db:
+    type: oci
+    image: postgres:16
+    ports:
+      - host: 5432
+        container: 5432
+    environment:
+      POSTGRES_PASSWORD: CHANGE_ME  # WARNING: replace with a strong password before use
+    volumes:
+      - source: pgdata
+        target: /var/lib/postgresql/data
+
+  # Example Wasm microservice
+  api:
+    type: wasm
+    path: ./target/api.wasm
+    environment:
+      DB_HOST: db
+      DB_PORT: "5432"
+    depends_on:
+      - db
+
+networks:
+  default:
+    driver: bridge
+
+volumes:
+  pgdata: {}

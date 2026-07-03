@@ -1,0 +1,36 @@
+# TPT Boxcar demo stack: brings up Scope's ingest + query API and Frontier's
+# control plane together through Origin, using `type: process` services
+# (Origin spawns and tears down real child processes for these — no Docker,
+# no docker-compose).
+#
+# Prerequisite: a ClickHouse server reachable at 127.0.0.1:9000. Origin does
+# not spawn this for you — its OCI runtime is still a stub (see origin/README.md)
+# so, unlike the process services below, an `type: oci` ClickHouse entry here
+# would not actually start anything. Run ClickHouse separately however you
+# normally would, then bring up this manifest from the repo root:
+#
+#   tpt origin up --manifest examples/demo-stack/manifest.yaml
+#
+# Every service here runs `go run`, so builds happen on first start (slower)
+# but nothing needs to be pre-built.
+
+name: tpt-boxcar-demo-stack
+
+services:
+  scope-ingest:
+    type: process
+    command: ["go", "run", "./scope/backend/cmd/ingest"]
+    environment:
+      CLICKHOUSE_PASS: changeme
+
+  scope-backend:
+    type: process
+    command: ["go", "run", "./scope/backend/cmd/backend"]
+    environment:
+      CLICKHOUSE_PASS: changeme
+    depends_on:
+      - scope-ingest
+
+  frontier-control-plane:
+    type: process
+    command: ["go", "run", "./frontier/control-plane"]

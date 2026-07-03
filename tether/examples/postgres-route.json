@@ -1,0 +1,6 @@
+{
+  "id": "app-to-postgres",
+  "pattern": "app/*",
+  "backend_id": "postgres-primary",
+  "priority": 100
+}

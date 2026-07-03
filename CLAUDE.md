@@ -130,9 +130,7 @@ cd origin/gui && npm run lint
 ### Plugin System (Frontier)
 Wasm plugins expose a host ABI defined in `frontier/plugin-sdk/`. Two SDKs: Rust (`frontier/plugin-sdk/`) and TypeScript (`frontier/typescript-sdk/`). Example plugins live in `frontier/examples/`. Plugins are loaded by Wasmtime in the proxy and can be hot-swapped without dropping connections.
 
-### Key Open Items (Phase 7 — Release Hardening)
-See `TODO.md` for the full list. High-priority security gaps:
-- JWT signature verification is unimplemented in `frontier/examples/jwt_validator.rs`
-- Frontier REST control plane has no API key authentication (`frontier/control-plane/internal/rest/handler.go`)
-- ClickHouse password passed as CLI flag instead of env var in `scope/backend/cmd/ingest/main.go`
-- Scope dashboard and Origin GUI components use mock data — real API wiring is pending
+### Key Open Items (Phase 9 — Driver Parity & Correctness)
+See `TODO.md` for the full list. Phase 7/8 items (JWT verification, Frontier REST auth, ClickHouse password env var, mock-data wiring) are complete. Remaining known gaps:
+- Postgres wire driver `execute()` doesn't report real affected-row counts for parameterized statements (`tether/proxy/src/drivers/wire_postgres.rs`)
+- MySQL wire driver prepared-statement binary resultset decoding is stubbed, and `execute()` ignores bound parameters entirely (`tether/proxy/src/drivers/wire_mysql.rs`)

@@ -22,6 +22,23 @@ pub enum Service {
     OCI(OCIService),
     #[serde(rename = "wasm")]
     Wasm(WasmService),
+    #[serde(rename = "process")]
+    Process(ProcessService),
+}
+
+/// A native process service: runs a pre-built binary directly (no
+/// containerd/Wasmtime involved). Useful for driving already-compiled
+/// control-plane binaries (e.g. the Go control planes) from an Origin
+/// manifest without requiring real OCI/Wasm runtime integration.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ProcessService {
+    pub command: Vec<String>,
+    #[serde(default)]
+    pub environment: HashMap<String, String>,
+    #[serde(default)]
+    pub working_dir: Option<PathBuf>,
+    #[serde(default)]
+    pub depends_on: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

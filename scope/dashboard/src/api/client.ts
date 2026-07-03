@@ -8,20 +8,35 @@ async function fetchJson<T>(path: string): Promise<T> {
   return res.json();
 }
 
+export interface QueryFilter {
+  /** Go duration string, e.g. "15m", "1h" (default: backend's own default, currently 1h). */
+  since?: string;
+  service?: string;
+}
+
+function withQuery(path: string, filter?: QueryFilter): string {
+  if (!filter) return path;
+  const params = new URLSearchParams();
+  if (filter.since) params.set("since", filter.since);
+  if (filter.service) params.set("service", filter.service);
+  const qs = params.toString();
+  return qs ? `${path}?${qs}` : path;
+}
+
 export function getServices(): Promise<ServiceNode[]> {
   return fetchJson("/api/v1/services");
 }
 
-export function getTraces(): Promise<TraceSpan[]> {
-  return fetchJson("/api/v1/traces");
+export function getTraces(filter?: QueryFilter): Promise<TraceSpan[]> {
+  return fetchJson(withQuery("/api/v1/traces", filter));
 }
 
-export function getMetrics(): Promise<MetricSeries[]> {
-  return fetchJson("/api/v1/metrics");
+export function getMetrics(filter?: QueryFilter): Promise<MetricSeries[]> {
+  return fetchJson(withQuery("/api/v1/metrics", filter));
 }
 
-export function getLogs(): Promise<LogEntry[]> {
-  return fetchJson("/api/v1/logs");
+export function getLogs(filter?: QueryFilter): Promise<LogEntry[]> {
+  return fetchJson(withQuery("/api/v1/logs", filter));
 }
 
 export function getWasmMetrics(): Promise<WasmModule[]> {

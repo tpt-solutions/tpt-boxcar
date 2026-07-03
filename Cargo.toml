@@ -6,6 +6,7 @@ members = [
     "tether/proxy",
     "scope/agent",
     "chisel/core",
+    "chisel/cli",
     "frontier/proxy",
     "frontier/plugin-sdk",
 ]

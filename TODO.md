@@ -2,7 +2,7 @@
 
 > **License:** Apache 2.0 | **Repo type:** Monorepo | **Platform:** Linux · macOS · Windows (WSL2 for eBPF)
 >
-> **Progress:** 140 / 140 tasks complete
+> **Progress:** 140 / 140 core tasks complete (Phase 0–8) · Phase 9 driver-correctness and Phase 10 backlog tracked separately below
 
 ---
 
@@ -339,3 +339,31 @@
 
 - [x] Wire up `cytoscape` (already in `scope/dashboard/package.json`) in `ServiceGraph.tsx` — replace hand-written SVG grid with a Cytoscape `cose` force-directed layout; health-coloured nodes, arrowhead edges, zoom/pan
 - [x] Wire up `recharts` (already in `scope/dashboard/package.json`) in `MetricsCharts.tsx` — replace SVG `<polyline>` with Recharts `<AreaChart>` / `<LineChart>`; add `<Tooltip>` and `<Legend>`; group series by metric name
+
+---
+
+## Phase 9 — Driver Parity & Correctness
+
+> **Progress:** 8 / 8 tasks complete
+
+- [x] Fix Postgres wire driver `execute()` to return real affected-row counts for parameterized statements (`tether/proxy/src/drivers/wire_postgres.rs`)
+- [x] Fix MySQL wire driver prepared-statement path to decode the real binary resultset instead of substituting `"SELECT 1"` (`tether/proxy/src/drivers/wire_mysql.rs`)
+- [x] Fix MySQL wire driver `execute()` to bind parameters via the prepared-statement path instead of ignoring them
+- [x] Add integration test coverage for parameterized `INSERT`/`UPDATE`/`DELETE` against real Postgres and MySQL confirming correct affected-row counts and correct decoded values (`tether/proxy/tests/wire_driver_integration.rs`, run with `--ignored`)
+- [x] Fix Postgres `simple_execute()` returning before consuming the trailing `ReadyForQuery` message — desynced every connection after its first non-parameterized `execute()` call
+- [x] Fix Postgres extended-query flow missing a `Describe` message — `RowDescription` (column names) was never sent by the server, so parameterized `query()` always returned empty column lists
+- [x] Fix MySQL `native_password_hash()` never incorporating the server's handshake scramble/nonce — authentication was a static hash that no real MySQL server would ever accept
+- [x] Fix MySQL packet-sequence handling — every command must reset its sequence id to 0, but a single ever-incrementing counter meant only the first command after connecting ever worked; also fixed parameter string encoding to use a length-encoded integer instead of a raw 4-byte length prefix (was corrupting every byte after a string parameter)
+
+---
+
+## Phase 10 — Beyond-Docker Differentiators (Backlog)
+
+> **Progress:** 0 / 6 tasks complete — exploratory, not yet committed
+
+- [ ] Wasm module signing / attestation at build time (Chisel) verified at load time (Origin) — supply-chain integrity Docker images don't get by default
+- [ ] Capability-scoped secrets injection via Tether — per-Wasm-module scoped credentials instead of whole-container env-var dumps
+- [ ] Deterministic replay / time-travel debugging — use Scope's eBPF traces to capture a Wasm module invocation's inputs and replay it offline without prod access
+- [ ] Document and benchmark true scale-to-zero density — Wasm cold-start (sub-ms–few-ms) vs container cold-start, enabling serverless-like packing without a serverless platform
+- [ ] Wasm plugin registry/marketplace for Frontier — shared, versioned plugin distribution (OCI-registry equivalent for Wasm plugins)
+- [ ] Document/benchmark true multi-arch-by-default — Wasm modules run unmodified on ARM/x86 without multi-arch image builds

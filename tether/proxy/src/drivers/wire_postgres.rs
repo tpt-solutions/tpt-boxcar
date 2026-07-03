@@ -132,11 +132,14 @@ impl PostgresWireDriver {
         }
     }
 
-    /// Read a complete result set after sending a Simple Query.
-    /// Returns columns and row data.
-    async fn read_result_set(&self) -> Result<(Vec<String>, Vec<Vec<serde_json::Value>>)> {
+    /// Read a complete result set after sending a Simple Query or Extended Query.
+    /// Returns columns, row data, and the affected-row count parsed from CommandComplete.
+    async fn read_result_set(
+        &self,
+    ) -> Result<(Vec<String>, Vec<Vec<serde_json::Value>>, u64)> {
         let mut columns = Vec::new();
         let mut rows = Vec::new();
+        let mut affected: u64 = 0;
 
         loop {
             let msg_type = self.read_message_type().await?;
@@ -195,7 +198,12 @@ impl PostgresWireDriver {
                     // CommandComplete — tag like "SELECT 5" or "INSERT 0 1"
                     let tag_end = body.iter().position(|&b| b == 0).unwrap_or(body.len());
                     let tag = String::from_utf8_lossy(&body[..tag_end]);
-                    debug!(tag = %tag, "command complete");
+                    affected = tag
+                        .rsplit(' ')
+                        .next()
+                        .and_then(|s| s.parse::<u64>().ok())
+                        .unwrap_or(0);
+                    debug!(tag = %tag, affected, "command complete");
                 }
                 b'I' => {
                     // EmptyQueryResponse
@@ -203,7 +211,7 @@ impl PostgresWireDriver {
                 }
                 b'Z' => {
                     // ReadyForQuery
-                    return Ok((columns, rows));
+                    return Ok((columns, rows, affected));
                 }
                 b'E' => {
                     let msg = Self::parse_error_message(&body);
@@ -231,11 +239,7 @@ impl PostgresWireDriver {
 
     /// Send an Extended Query: Parse + Bind + Execute + Sync.
     /// For parameterized queries (used by the Extended Query protocol).
-    async fn extended_query(
-        &self,
-        sql: &str,
-        params: &[serde_json::Value],
-    ) -> Result<QueryRow> {
+    async fn send_extended(&self, sql: &str, params: &[serde_json::Value]) -> Result<()> {
         let portal = "";
         let stmt_name = "";
 
@@ -273,6 +277,15 @@ impl PostgresWireDriver {
         bind_msg.extend_from_slice(&0u16.to_be_bytes());
         self.send_frontend(b'B', &bind_msg).await?;
 
+        // Describe the portal so the server sends RowDescription (column
+        // names) before the data rows — without this, Postgres only sends
+        // DataRow/CommandComplete and callers never learn the column names.
+        let mut describe_msg = Vec::new();
+        describe_msg.push(b'P');
+        describe_msg.extend_from_slice(portal.as_bytes());
+        describe_msg.push(0);
+        self.send_frontend(b'D', &describe_msg).await?;
+
         // Execute
         let mut exec_msg = Vec::new();
         exec_msg.extend_from_slice(portal.as_bytes());
@@ -282,9 +295,13 @@ impl PostgresWireDriver {
         self.send_frontend(b'E', &exec_msg).await?;
 
         // Sync
-        self.send_frontend(b'S', &[]).await?;
+        self.send_frontend(b'S', &[]).await
+    }
 
-        let (columns, row_values) = self.read_result_set().await?;
+    /// Send an Extended Query and collect the resulting rows.
+    async fn extended_query(&self, sql: &str, params: &[serde_json::Value]) -> Result<QueryRow> {
+        self.send_extended(sql, params).await?;
+        let (columns, row_values, _affected) = self.read_result_set().await?;
         Ok(QueryRow {
             columns,
             values: row_values
@@ -311,7 +328,7 @@ impl PostgresWireDriver {
         msg.push(0);
         self.send_frontend(b'Q', &msg).await?;
 
-        let (columns, row_values) = self.read_result_set().await?;
+        let (columns, row_values, _affected) = self.read_result_set().await?;
         Ok(QueryRow {
             columns,
             values: row_values
@@ -328,7 +345,10 @@ impl PostgresWireDriver {
         msg.push(0);
         self.send_frontend(b'Q', &msg).await?;
 
-        // Read until ReadyForQuery
+        // Read until ReadyForQuery — must not return early on CommandComplete,
+        // otherwise the trailing ReadyForQuery is left unread and desyncs the
+        // next command sent on this connection.
+        let mut affected: u64 = 0;
         loop {
             let msg_type = self.read_message_type().await?;
             let body = self.read_message().await?;
@@ -339,12 +359,11 @@ impl PostgresWireDriver {
                     let tag_end = body.iter().position(|&b| b == 0).unwrap_or(body.len());
                     let tag = String::from_utf8_lossy(&body[..tag_end]);
                     // Tags like "INSERT 0 1", "UPDATE 5", "DELETE 3"
-                    let count = tag
+                    affected = tag
                         .rsplit(' ')
                         .next()
                         .and_then(|s| s.parse::<u64>().ok())
                         .unwrap_or(0);
-                    return Ok(count);
                 }
                 b'E' => {
                     let msg = Self::parse_error_message(&body);
@@ -353,10 +372,9 @@ impl PostgresWireDriver {
                 }
                 b'I' => {
                     // EmptyQueryResponse
-                    return Ok(0);
                 }
                 b'Z' => {
-                    return Ok(0);
+                    return Ok(affected);
                 }
                 _ => {
                     debug!(msg_type = %msg_type, "skipping in execute");
@@ -389,13 +407,9 @@ impl PostgresWireDriver {
         if params.is_empty() {
             self.simple_execute(sql).await
         } else {
-            // Extended query for parameterized statements
-            self.extended_query(sql, params).await?;
-            // For DML, the CommandComplete tag already provided the count
-            // We re-execute via simple_query to get row count for non-SELECT
-            // Actually, extended_query already reads the result set; the count is in CommandComplete
-            // For simplicity, run a separate SELECT to confirm
-            Ok(0)
+            self.send_extended(sql, params).await?;
+            let (_columns, _rows, affected) = self.read_result_set().await?;
+            Ok(affected)
         }
     }
 

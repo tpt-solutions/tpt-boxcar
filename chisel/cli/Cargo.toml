@@ -1,20 +1,20 @@
 [package]
-name = "tpt-origin"
+name = "tpt-chisel"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
 
 [[bin]]
-name = "tpt"
+name = "chisel"
 path = "src/main.rs"
 
 [dependencies]
-tpt-origin-core = { path = "../core" }
+tpt-chisel-core = { path = "../core" }
 tokio.workspace = true
 anyhow.workspace = true
 clap = { version = "4", features = ["derive"] }
 tracing.workspace = true
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
-serde_yaml.workspace = true
 serde.workspace = true
 serde_json.workspace = true
+serde_yaml.workspace = true

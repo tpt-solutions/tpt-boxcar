@@ -40,12 +40,13 @@ impl MysqlWireDriver {
         }
     }
 
-    fn next_seq(&self) -> u8 {
-        self.sequence_id.fetch_add(1, Ordering::SeqCst)
-    }
-
-    fn current_seq(&self) -> u8 {
-        self.sequence_id.load(Ordering::SeqCst)
+    /// Reset the packet sequence for a new top-level command. Every MySQL
+    /// command (COM_QUERY, COM_STMT_PREPARE, COM_STMT_EXECUTE, COM_PING, ...)
+    /// must start its own packet sequence at 0 — it does not continue from
+    /// whatever the previous command left off.
+    fn start_command(&self) -> u8 {
+        self.sequence_id.store(1, Ordering::SeqCst);
+        0
     }
 
     async fn read_packet(stream: &mut TcpStream) -> Result<Vec<u8>> {
@@ -69,19 +70,23 @@ impl MysqlWireDriver {
         Ok(())
     }
 
-    fn native_password_hash(password: &str) -> Vec<u8> {
+    /// mysql_native_password token: SHA1(password) XOR SHA1(scramble + SHA1(SHA1(password))).
+    /// The scramble is the server-issued random nonce from the handshake (or
+    /// auth-switch request) — omitting it would produce a static, replayable
+    /// hash that no real server would ever accept.
+    fn native_password_hash(password: &str, scramble: &[u8]) -> Vec<u8> {
         use sha1::{Digest, Sha1};
         let mut sha1_pass = Sha1::new();
         sha1_pass.update(password.as_bytes());
         let stage1: [u8; 20] = sha1_pass.finalize().into();
 
         let mut sha1_stage1 = Sha1::new();
-        sha1_stage1.update(&stage1);
+        sha1_stage1.update(stage1);
         let stage2: [u8; 20] = sha1_stage1.finalize().into();
 
         let mut sha1_full = Sha1::new();
-        sha1_full.update(password.as_bytes());
-        sha1_full.update(&stage2);
+        sha1_full.update(scramble);
+        sha1_full.update(stage2);
         let stage3: [u8; 20] = sha1_full.finalize().into();
 
         let mut result = [0u8; 20];
@@ -107,7 +112,22 @@ impl MysqlWireDriver {
             .iter()
             .position(|&b| b == 0)
             .context("missing null terminator in server version")?;
-        let cap_offset = 1 + version_end + 1 + 4 + 8 + 1;
+        // auth-plugin-data-part-1 (first 8 bytes of the scramble) follows the
+        // connection id, which follows the null-terminated version string.
+        let salt1_offset = 1 + version_end + 1 + 4;
+        let cap_offset = salt1_offset + 8 + 1;
+        // auth-plugin-data-part-2 (remaining ~12 scramble bytes) follows
+        // capability_flags_lower(2) + charset(1) + status(2) + capability_flags_upper(2)
+        // + auth_plugin_data_len(1) + 10 reserved bytes.
+        let salt2_offset = cap_offset + 2 + 1 + 2 + 2 + 1 + 10;
+        let mut scramble = Vec::with_capacity(20);
+        if handshake.len() >= salt1_offset + 8 {
+            scramble.extend_from_slice(&handshake[salt1_offset..salt1_offset + 8]);
+        }
+        if handshake.len() >= salt2_offset + 12 {
+            scramble.extend_from_slice(&handshake[salt2_offset..salt2_offset + 12]);
+        }
+
         let server_capabilities: u32 = if handshake.len() >= cap_offset + 4 {
             u32::from_le_bytes([
                 handshake[cap_offset],
@@ -137,7 +157,7 @@ impl MysqlWireDriver {
         resp.push(0);
 
         if !password.is_empty() {
-            let hash = Self::native_password_hash(password);
+            let hash = Self::native_password_hash(password, &scramble);
             resp.push(hash.len() as u8);
             resp.extend_from_slice(&hash);
         } else {
@@ -180,12 +200,15 @@ impl MysqlWireDriver {
             }
             0xFE => {
                 let switch_pos = 1;
-                let new_plugin = if let Some(end) =
+                let (new_plugin, name_end) = if let Some(end) =
                     response[switch_pos..].iter().position(|&b| b == 0)
                 {
-                    std::str::from_utf8(&response[switch_pos..switch_pos + end])
-                        .context("invalid auth plugin name")?
-                        .to_string()
+                    (
+                        std::str::from_utf8(&response[switch_pos..switch_pos + end])
+                            .context("invalid auth plugin name")?
+                            .to_string(),
+                        end,
+                    )
                 } else {
                     warn!("malformed auth switch request from server");
                     bail!("malformed auth switch request");
@@ -193,8 +216,15 @@ impl MysqlWireDriver {
 
                 debug!(plugin = %new_plugin, "auth switch requested");
 
+                // New scramble bytes follow the null-terminated plugin name.
+                let new_scramble_start = switch_pos + name_end + 1;
+                let new_scramble: Vec<u8> = response
+                    .get(new_scramble_start..)
+                    .map(|s| s.iter().take_while(|&&b| b != 0).copied().collect())
+                    .unwrap_or_default();
+
                 if new_plugin == "mysql_native_password" && !password.is_empty() {
-                    let hash = Self::native_password_hash(password);
+                    let hash = Self::native_password_hash(password, &new_scramble);
                     Self::write_packet(stream, 2, &hash).await?;
 
                     let auth_response = Self::read_packet(stream).await?;
@@ -284,6 +314,192 @@ impl MysqlWireDriver {
             }
         }
     }
+
+    /// Parse a column-definition packet, returning (name, MySQL column type byte).
+    fn parse_column_def(packet: &[u8]) -> (String, u8) {
+        let mut pos = 0;
+        let _catalog = read_lenenc_str(packet, &mut pos);
+        let _schema = read_lenenc_str(packet, &mut pos);
+        let _table = read_lenenc_str(packet, &mut pos);
+        let _org_table = read_lenenc_str(packet, &mut pos);
+        let name = read_lenenc_str(packet, &mut pos);
+        let _org_name = read_lenenc_str(packet, &mut pos);
+        let _fixed_len = read_lenenc_int(packet, &mut pos); // always 0x0c
+        pos += 2; // character set
+        pos += 4; // column length
+        let col_type = packet.get(pos).copied().unwrap_or(0);
+        (name, col_type)
+    }
+
+    /// Decode a single binary-protocol column value at `pos`, advancing `pos` past it.
+    fn decode_binary_value(pkt: &[u8], pos: &mut usize, col_type: u8) -> Result<serde_json::Value> {
+        Ok(match col_type {
+            0x01 => {
+                // TINY
+                let v = *pkt.get(*pos).context("truncated tiny value")? as i8;
+                *pos += 1;
+                serde_json::json!(v)
+            }
+            0x02 => {
+                // SHORT
+                let v = i16::from_le_bytes([
+                    *pkt.get(*pos).context("truncated short value")?,
+                    *pkt.get(*pos + 1).context("truncated short value")?,
+                ]);
+                *pos += 2;
+                serde_json::json!(v)
+            }
+            0x03 | 0x09 => {
+                // LONG, INT24
+                let v = i32::from_le_bytes([
+                    *pkt.get(*pos).context("truncated long value")?,
+                    *pkt.get(*pos + 1).context("truncated long value")?,
+                    *pkt.get(*pos + 2).context("truncated long value")?,
+                    *pkt.get(*pos + 3).context("truncated long value")?,
+                ]);
+                *pos += 4;
+                serde_json::json!(v)
+            }
+            0x08 => {
+                // LONGLONG
+                let v = i64::from_le_bytes([
+                    *pkt.get(*pos).context("truncated longlong value")?,
+                    *pkt.get(*pos + 1).context("truncated longlong value")?,
+                    *pkt.get(*pos + 2).context("truncated longlong value")?,
+                    *pkt.get(*pos + 3).context("truncated longlong value")?,
+                    *pkt.get(*pos + 4).context("truncated longlong value")?,
+                    *pkt.get(*pos + 5).context("truncated longlong value")?,
+                    *pkt.get(*pos + 6).context("truncated longlong value")?,
+                    *pkt.get(*pos + 7).context("truncated longlong value")?,
+                ]);
+                *pos += 8;
+                serde_json::json!(v)
+            }
+            0x04 => {
+                // FLOAT
+                let v = f32::from_le_bytes([
+                    *pkt.get(*pos).context("truncated float value")?,
+                    *pkt.get(*pos + 1).context("truncated float value")?,
+                    *pkt.get(*pos + 2).context("truncated float value")?,
+                    *pkt.get(*pos + 3).context("truncated float value")?,
+                ]);
+                *pos += 4;
+                serde_json::json!(v)
+            }
+            0x05 => {
+                // DOUBLE
+                let v = f64::from_le_bytes([
+                    *pkt.get(*pos).context("truncated double value")?,
+                    *pkt.get(*pos + 1).context("truncated double value")?,
+                    *pkt.get(*pos + 2).context("truncated double value")?,
+                    *pkt.get(*pos + 3).context("truncated double value")?,
+                    *pkt.get(*pos + 4).context("truncated double value")?,
+                    *pkt.get(*pos + 5).context("truncated double value")?,
+                    *pkt.get(*pos + 6).context("truncated double value")?,
+                    *pkt.get(*pos + 7).context("truncated double value")?,
+                ]);
+                *pos += 8;
+                serde_json::json!(v)
+            }
+            // VARCHAR, VAR_STRING, STRING, BLOB, NEWDECIMAL, date/time types, etc.
+            _ => serde_json::Value::String(read_lenenc_str(pkt, pos)),
+        })
+    }
+
+    /// Read the response to COM_STMT_EXECUTE: either an OK packet (DML, no
+    /// result set) or a binary-protocol result set.
+    async fn read_binary_resultset(stream: &mut TcpStream) -> Result<QueryRow> {
+        let first = Self::read_packet(stream).await?;
+        if first.is_empty() {
+            warn!("empty packet received reading execute response");
+            bail!("empty packet");
+        }
+
+        if first[0] == 0x00 {
+            let mut pos = 1;
+            let affected = read_lenenc_int(&first, &mut pos);
+            return Ok(QueryRow {
+                columns: vec!["affected_rows".to_string()],
+                values: vec![serde_json::json!(affected)],
+            });
+        }
+
+        if first[0] == 0xFF {
+            let err_code = if first.len() >= 3 {
+                u16::from_le_bytes([first[1], first[2]])
+            } else {
+                0
+            };
+            let err_msg = if first.len() > 3 {
+                String::from_utf8_lossy(&first[3..]).to_string()
+            } else {
+                "unknown error".to_string()
+            };
+            warn!(err_code, err_msg = %err_msg, "MySQL error during execute");
+            bail!("MySQL error {}: {}", err_code, err_msg);
+        }
+
+        let mut pos = 0;
+        let column_count = read_lenenc_int(&first, &mut pos) as usize;
+
+        let mut columns = Vec::with_capacity(column_count);
+        let mut col_types = Vec::with_capacity(column_count);
+        for _ in 0..column_count {
+            let pkt = Self::read_packet(stream).await?;
+            let (name, col_type) = Self::parse_column_def(&pkt);
+            columns.push(name);
+            col_types.push(col_type);
+        }
+        if column_count > 0 {
+            let eof = Self::read_packet(stream).await?;
+            if eof.is_empty() || eof[0] != 0xFE {
+                warn!("expected EOF after column definitions");
+                bail!("expected EOF after column definitions");
+            }
+        }
+
+        let null_bitmap_len = (column_count + 7 + 2) / 8;
+        let mut rows = Vec::new();
+        loop {
+            let pkt = Self::read_packet(stream).await?;
+            if pkt.is_empty() {
+                warn!("empty packet received while reading binary row");
+                bail!("empty packet");
+            }
+            if pkt[0] == 0xFE && pkt.len() < 9 {
+                break;
+            }
+            if pkt[0] == 0xFF {
+                let err_code = u16::from_le_bytes([pkt[1], pkt[2]]);
+                let err_msg = String::from_utf8_lossy(&pkt[3..]).to_string();
+                warn!(err_code, err_msg = %err_msg, "MySQL error during binary row read");
+                bail!("MySQL error {}: {}", err_code, err_msg);
+            }
+
+            let null_bitmap = &pkt[1..1 + null_bitmap_len];
+            let mut vpos = 1 + null_bitmap_len;
+            let mut row_values = Vec::with_capacity(column_count);
+            for (i, &col_type) in col_types.iter().enumerate() {
+                let byte_idx = (i + 2) / 8;
+                let bit_idx = (i + 2) % 8;
+                let is_null = null_bitmap
+                    .get(byte_idx)
+                    .map(|b| (b >> bit_idx) & 1 == 1)
+                    .unwrap_or(false);
+                if is_null {
+                    row_values.push(serde_json::Value::Null);
+                    continue;
+                }
+                row_values.push(Self::decode_binary_value(&pkt, &mut vpos, col_type)?);
+            }
+            rows.push(serde_json::Value::Array(row_values));
+        }
+
+        Ok(QueryRow {
+            columns,
+            values: rows,
+        })
+    }
 }
 
 impl MysqlWireDriver {
@@ -297,7 +513,7 @@ impl MysqlWireDriver {
 
     #[instrument(skip(self, params), fields(sql = %&sql[..80.min(sql.len())]))]
     pub async fn query(&self, sql: &str, params: &[serde_json::Value]) -> Result<QueryRow> {
-        let seq = self.next_seq();
+        let seq = self.start_command();
 
         if !params.is_empty() {
             let mut guard = self.stream.lock().await;
@@ -320,17 +536,27 @@ impl MysqlWireDriver {
                 prepare_response[3],
                 prepare_response[4],
             ]);
+            let num_columns = u16::from_le_bytes([prepare_response[5], prepare_response[6]]);
+            let num_params = u16::from_le_bytes([prepare_response[7], prepare_response[8]]);
 
-            // Read param definitions until EOF
-            loop {
-                let pkt = Self::read_packet(stream).await?;
-                if pkt.is_empty() || pkt[0] == 0xFE {
-                    break;
+            // Read and discard parameter-definition packets + trailing EOF
+            if num_params > 0 {
+                for _ in 0..num_params {
+                    Self::read_packet(stream).await?;
                 }
+                Self::read_packet(stream).await?;
+            }
+            // Read and discard column-definition packets + trailing EOF
+            // (COM_STMT_EXECUTE resends column definitions, so these aren't needed here)
+            if num_columns > 0 {
+                for _ in 0..num_columns {
+                    Self::read_packet(stream).await?;
+                }
+                Self::read_packet(stream).await?;
             }
 
-            // COM_STMT_EXECUTE
-            let exec_seq = self.next_seq();
+            // COM_STMT_EXECUTE is a new top-level command — its own sequence starts at 0.
+            let exec_seq = self.start_command();
             let mut exec_payload = Vec::new();
             exec_payload.push(0x17);
             exec_payload.extend_from_slice(&stmt_id.to_le_bytes());
@@ -377,19 +603,19 @@ impl MysqlWireDriver {
                         }
                     }
                     serde_json::Value::String(s) => {
-                        exec_payload.extend_from_slice(&(s.len() as u32).to_le_bytes());
+                        write_lenenc_int(&mut exec_payload, s.len() as u64);
                         exec_payload.extend_from_slice(s.as_bytes());
                     }
                     _ => {
                         let s = p.to_string();
-                        exec_payload.extend_from_slice(&(s.len() as u32).to_le_bytes());
+                        write_lenenc_int(&mut exec_payload, s.len() as u64);
                         exec_payload.extend_from_slice(s.as_bytes());
                     }
                 }
             }
 
             Self::write_packet(stream, exec_seq, &exec_payload).await?;
-            let result = Self::com_query(stream, "SELECT 1", self.next_seq()).await?;
+            let result = Self::read_binary_resultset(stream).await?;
             return Ok(result);
         }
 
@@ -398,12 +624,9 @@ impl MysqlWireDriver {
         Self::com_query(stream, sql, seq).await
     }
 
-    #[instrument(skip(self, _params), fields(sql = %&sql[..80.min(sql.len())]))]
-    pub async fn execute(&self, sql: &str, _params: &[serde_json::Value]) -> Result<u64> {
-        let seq = self.next_seq();
-        let mut guard = self.stream.lock().await;
-        let stream = guard.as_mut().context("not connected")?;
-        let result = Self::com_query(stream, sql, seq).await?;
+    #[instrument(skip(self, params), fields(sql = %&sql[..80.min(sql.len())]))]
+    pub async fn execute(&self, sql: &str, params: &[serde_json::Value]) -> Result<u64> {
+        let result = self.query(sql, params).await?;
         if let Some(val) = result.values.first() {
             if let Some(v) = val.get("affected_rows").or(Some(val)) {
                 return v.as_u64().context("invalid affected rows value");
@@ -443,7 +666,7 @@ impl MysqlWireDriver {
             warn!("attempted ping on disconnected MySQL connection");
             bail!("not connected");
         }
-        let seq = self.next_seq();
+        let seq = self.start_command();
         let mut guard = self.stream.lock().await;
         let stream = guard.as_mut().context("not connected")?;
         Self::write_packet(stream, seq, &[0x0E]).await?; // COM_PING
@@ -470,6 +693,24 @@ impl Clone for MysqlWireDriver {
             connected: self.connected,
             sequence_id: AtomicU8::new(self.sequence_id.load(Ordering::SeqCst)),
         }
+    }
+}
+
+/// Write a length-encoded integer (used for binary-protocol parameter string
+/// lengths). Not a raw fixed-width integer — encoding a length as a plain
+/// 4-byte value instead of this format desyncs every byte that follows.
+fn write_lenenc_int(buf: &mut Vec<u8>, val: u64) {
+    if val < 251 {
+        buf.push(val as u8);
+    } else if val < 0x10000 {
+        buf.push(0xFC);
+        buf.extend_from_slice(&(val as u16).to_le_bytes());
+    } else if val < 0x1000000 {
+        buf.push(0xFD);
+        buf.extend_from_slice(&(val as u32).to_le_bytes()[0..3]);
+    } else {
+        buf.push(0xFE);
+        buf.extend_from_slice(&val.to_le_bytes());
     }
 }
 

@@ -13,21 +13,46 @@ TPT Boxcar provides five integrated products that cover the full application lif
 | [**TPT Origin**](./origin) | Unified local sandbox — OCI containers + Wasm side by side | Rust, containerd, Wasmtime, eBPF, Tauri |
 | [**TPT Tether**](./tether) | State & connection proxy for Wasm workloads | Rust (Tokio), WIT, Go control plane |
 | [**TPT Scope**](./scope) | Hybrid eBPF observability — zero-code distributed tracing | Rust/Go eBPF, OTel, ClickHouse, React |
-| [**TPT Chisel**](./chisel) | Automated image distiller & Wasm migrator | Go, eBPF, AI/LLM analysis |
+| [**TPT Chisel**](./chisel) | Automated image distiller & Wasm migrator | Rust, AI/LLM analysis (Ollama, Claude, OpenAI) |
 | [**TPT Frontier**](./frontier) | Wasm-native edge service mesh & API gateway | Rust (Hyper, Tokio), Wasmtime, Go xDS |
 
 ## Quick Start
 
 ```bash
-# 1. Clone the repo
 git clone https://github.com/tpt-solutions/tpt-boxcar.git && cd tpt-boxcar
-
-# 2. Build the Rust workspace
-cargo build --workspace
-
-# 3. Build the Go components
-go build ./...
+cargo build --workspace   # Origin, Chisel, Tether/Frontier data-plane libs
+go build ./...            # Tether, Scope, Frontier control planes
 ```
+
+That builds everything, but doesn't run anything yet. Pick a product below and follow its 5-minute quickstart — each is independently runnable:
+
+| Product | Try it in 5 minutes | What it demos |
+|---------|----------------------|----------------|
+| [**Origin**](origin/README.md) | `cargo build -p tpt-origin && tpt origin init --dir demo && cd demo && tpt origin up` | Spin up a local sandbox mixing OCI containers and Wasm modules from one manifest |
+| [**Chisel**](chisel/README.md) | `cargo build -p tpt-chisel && chisel analyze <image-dir> && chisel distill <image-dir> --dockerfile` | Distill a container image into a minimal, Wasm-migration-aware image with SBOM + CVE scan; `chisel migrate`/`chisel audit` add LLM-generated migration/security plans |
+| [**Frontier**](frontier/README.md) | `go run ./frontier/control-plane` then `curl` in a route/upstream from `frontier/examples/getting-started/` | Configure an edge gateway route through REST/gRPC |
+| [**Tether**](tether/README.md) | `go run ./tether/control-plane` then `curl` in a backend/route from `tether/examples/` | Register a DB backend + route for the Wasm-facing connection proxy |
+| [**Scope**](scope/README.md) | `go run ./scope/backend/cmd/ingest` + `cmd/backend`, then send an OTLP trace | Query traces/metrics/logs ingested from a running service |
+
+We deliberately don't ship a Docker/docker-compose quickstart — Origin's whole point is replacing container tooling with containerd + Wasmtime directly, so bootstrapping the demo through Docker would undercut the pitch. Instead, [`examples/demo-stack/manifest.yaml`](examples/demo-stack/manifest.yaml) brings up Scope's ingest/query API and Frontier's control plane together as real child processes through Origin itself:
+
+```bash
+cargo build -p tpt-origin
+# requires a ClickHouse server at 127.0.0.1:9000 — Origin's OCI runtime doesn't spawn one yet (see origin/README.md)
+./target/debug/tpt origin up --manifest examples/demo-stack/manifest.yaml
+```
+
+This works today because Origin's `type: process` service kind spawns and tears down real OS processes (unlike `type: oci`/`type: wasm`, which are still bookkeeping-only pending containerd/Wasmtime integration).
+
+## AI agent integration (MCP)
+
+[`mcp-server/`](mcp-server/README.md) exposes all five products as MCP tools over stdio, so an AI agent (Claude Code, Claude Desktop, etc.) can drive them directly — start a sandbox, distill an image, configure a gateway route, query traces — instead of a human running curl/CLI commands by hand.
+
+```bash
+cd mcp-server && go build -o mcp-server .
+```
+
+Then point your MCP client's config at the built binary. See [mcp-server/README.md](mcp-server/README.md) for the full tool list and configuration options.
 
 ## Products
 
@@ -55,17 +80,16 @@ tpt-boxcar/
 │   ├── backend/     #   Go query API + ClickHouse
 │   └── dashboard/   #   React + TypeScript frontend
 ├── chisel/          # TPT Chisel — image distiller & Wasm migrator
-│   └── core/        #   Go core engine
+│   ├── core/        #   Rust core engine (analysis, distillation, AI orchestration)
+│   └── cli/         #   CLI binary
 ├── frontier/        # TPT Frontier — edge service mesh
 │   ├── proxy/       #   Rust data plane
 │   └── plugin-sdk/  #   Plugin SDK crate
+├── mcp-server/      # MCP server exposing all 5 products as AI agent tools
+├── examples/        # Cross-product examples (e.g. demo-stack/ for Origin-driven demos)
 └── docs/            # Documentation site (Docusaurus)
 ```
 
 ## License
 
 Apache 2.0 — see [LICENSE](./LICENSE).
-
-## Contributing
-
-See [CONTRIBUTING.md](./CONTRIBUTING.md) for branch, commit, and PR conventions.

@@ -1,6 +1,8 @@
 use clap::{Parser, Subcommand};
 use std::path::PathBuf;
 
+mod state;
+
 #[derive(Parser)]
 #[command(
     name = "tpt",
@@ -59,6 +61,7 @@ enum OriginCommands {
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     tracing_subscriber::fmt()
+        .with_writer(std::io::stderr)
         .with_env_filter(
             tracing_subscriber::EnvFilter::try_from_default_env()
                 .unwrap_or_else(|_| "info".into()),
@@ -79,51 +82,16 @@ async fn main() -> anyhow::Result<()> {
     }
 }
 
+const MANIFEST_TEMPLATE: &str =
+    include_str!("../../examples/getting-started/manifest.yaml");
+
 async fn cmd_init(dir: &PathBuf) -> anyhow::Result<()> {
     let manifest_path = dir.join("manifest.yaml");
     if manifest_path.exists() {
         anyhow::bail!("manifest.yaml already exists in {}", dir.display());
     }
 
-    let template = r#"# TPT Origin Manifest
-# Docs: https://github.com/tpt-boxcar/tpt-boxcar/blob/main/docs/origin/manifest.md
-
-name: my-app
-version: "1.0"
-
-services:
-  # Example OCI container
-  db:
-    type: oci
-    image: postgres:16
-    ports:
-      - host: 5432
-        container: 5432
-    environment:
-      POSTGRES_PASSWORD: CHANGE_ME  # WARNING: replace with a strong password before use
-    volumes:
-      - source: pgdata
-        target: /var/lib/postgresql/data
-
-  # Example Wasm microservice
-  api:
-    type: wasm
-    path: ./target/api.wasm
-    environment:
-      DB_HOST: db
-      DB_PORT: "5432"
-    depends_on:
-      - db
-
-networks:
-  default:
-    driver: bridge
-
-volumes:
-  pgdata: {}
-"#;
-
-    std::fs::write(&manifest_path, template)?;
+    std::fs::write(&manifest_path, MANIFEST_TEMPLATE)?;
     println!("Created manifest.yaml in {}", dir.display());
     Ok(())
 }
@@ -146,26 +114,95 @@ async fn cmd_up(manifest_path: &PathBuf) -> anyhow::Result<()> {
             tpt_origin_core::manifest::Service::Wasm(wasm) => {
                 println!("  {name}: Wasm ({})", wasm.path.display());
             }
+            tpt_origin_core::manifest::Service::Process(process) => {
+                println!("  {name}: Process ({})", process.command.join(" "));
+            }
         }
     }
 
     let mut lifecycle = tpt_origin_core::lifecycle::LifecycleManager::new(&manifest);
     lifecycle.up(&manifest).await?;
 
+    let state_dir = manifest_path.parent().unwrap_or_else(|| std::path::Path::new("."));
+    let pids = lifecycle.service_pids();
+    let services = manifest
+        .services
+        .iter()
+        .map(|(name, service)| state::ServiceState {
+            name: name.clone(),
+            service_type: match service {
+                tpt_origin_core::manifest::Service::OCI(_) => "oci".to_string(),
+                tpt_origin_core::manifest::Service::Wasm(_) => "wasm".to_string(),
+                tpt_origin_core::manifest::Service::Process(_) => "process".to_string(),
+            },
+            pid: pids.get(name).copied(),
+        })
+        .collect();
+    state::write(
+        state_dir,
+        &state::EnvironmentState {
+            manifest_name: manifest.name.clone(),
+            pid: std::process::id(),
+            started_at: chrono_now(),
+            services,
+        },
+    )?;
+
     println!("\nAll services are running. Press Ctrl+C to stop.");
     lifecycle.wait_for_signal().await?;
     lifecycle.down().await?;
+    state::clear(state_dir)?;
     Ok(())
 }
 
+fn chrono_now() -> String {
+    // Avoid pulling in a chrono dependency just for a timestamp string.
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default();
+    format!("{}", now.as_secs())
+}
+
 async fn cmd_down() -> anyhow::Result<()> {
-    println!("Tearing down services...");
+    let dir = std::path::Path::new(".");
+    match state::read(dir)? {
+        Some(env) => {
+            println!("Tearing down environment: {}", env.manifest_name);
+            for svc in &env.services {
+                println!("  stopping {} ({})", svc.name, svc.service_type);
+                // Kill real child processes directly first: force-killing the
+                // parent `up` process below does not cascade to its children
+                // (no process-group semantics on Windows), so without this a
+                // `type: process` service would be orphaned rather than
+                // actually torn down.
+                if let Some(pid) = svc.pid {
+                    if !state::terminate(pid) {
+                        println!("    warning: could not signal process {pid} (it may have already exited)");
+                    }
+                }
+            }
+            if !state::terminate(env.pid) {
+                println!(
+                    "  warning: could not signal process {} (it may have already exited)",
+                    env.pid
+                );
+            }
+            state::clear(dir)?;
+            println!("Environment torn down.");
+        }
+        None => println!("No running environment found (run `tpt origin up` first)."),
+    }
     Ok(())
 }
 
 async fn cmd_ps() -> anyhow::Result<()> {
     println!("{:<20} {:<10} {:<10}", "NAME", "TYPE", "STATUS");
     println!("{:<20} {:<10} {:<10}", "----", "----", "------");
+    if let Some(env) = state::read(std::path::Path::new("."))? {
+        for svc in &env.services {
+            println!("{:<20} {:<10} {:<10}", svc.name, svc.service_type, "running");
+        }
+    }
     Ok(())
 }
 

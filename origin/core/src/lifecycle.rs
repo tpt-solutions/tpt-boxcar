@@ -106,6 +106,11 @@ impl LifecycleManager {
         &self.health
     }
 
+    /// PIDs of services that are real OS processes, keyed by service name.
+    pub fn service_pids(&self) -> HashMap<String, u32> {
+        self.runtime.list_pids()
+    }
+
     pub async fn wait_for_signal(&self) -> Result<()> {
         tokio::signal::ctrl_c().await?;
         tracing::info!("Received shutdown signal");

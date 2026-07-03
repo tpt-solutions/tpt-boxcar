@@ -2,6 +2,7 @@ package main
 
 import (
 	"fmt"
+	"math"
 	"net/http"
 	"sort"
 	"strings"
@@ -55,7 +56,23 @@ type latencyHistogram struct {
 	buckets []float64
 	counts  []*atomic.Int64
 	total   atomic.Int64
-	sum     atomic.Float64
+	// sumBits stores math.Float64bits(sum); sync/atomic has no Float64 type,
+	// so the sum is CAS-looped as its bit pattern instead.
+	sumBits atomic.Uint64
+}
+
+func (h *latencyHistogram) addSum(v float64) {
+	for {
+		old := h.sumBits.Load()
+		next := math.Float64bits(math.Float64frombits(old) + v)
+		if h.sumBits.CompareAndSwap(old, next) {
+			return
+		}
+	}
+}
+
+func (h *latencyHistogram) loadSum() float64 {
+	return math.Float64frombits(h.sumBits.Load())
 }
 
 func newLatencyHistogram(buckets []float64) latencyHistogram {
@@ -72,7 +89,7 @@ func newLatencyHistogram(buckets []float64) latencyHistogram {
 
 func (h *latencyHistogram) observe(seconds float64) {
 	h.total.Add(1)
-	h.sum.Add(seconds)
+	h.addSum(seconds)
 	for i, b := range h.buckets {
 		if seconds <= b {
 			h.counts[i].Add(1)
@@ -83,7 +100,7 @@ func (h *latencyHistogram) observe(seconds float64) {
 
 func (h *latencyHistogram) snapshot() (total int64, sum float64, counts []int64) {
 	total = h.total.Load()
-	sum = h.sum.Load()
+	sum = h.loadSum()
 	counts = make([]int64, len(h.counts))
 	for i, c := range h.counts {
 		counts[i] = c.Load()

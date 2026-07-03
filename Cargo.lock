@@ -2629,6 +2629,21 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "8df9b6e13f2d32c91b9bd719c00d1958837bc7dec474d94952798cc8e69eeec3"
 
 [[package]]
+name = "tpt-chisel"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "clap",
+ "serde",
+ "serde_json",
+ "serde_yaml",
+ "tokio",
+ "tpt-chisel-core",
+ "tracing",
+ "tracing-subscriber",
+]
+
+[[package]]
 name = "tpt-chisel-core"
 version = "0.1.0"
 dependencies = [
@@ -2699,6 +2714,8 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "clap",
+ "serde",
+ "serde_json",
  "serde_yaml",
  "tokio",
  "tpt-origin-core",
