@@ -139,6 +139,9 @@ impl OtelExporter {
             EventData::WasmRuntime(wasm_event) => {
                 self.emit_wasm_trace(event, wasm_event, enrichment)
             }
+            EventData::WasmInvocation(invocation) => {
+                self.emit_wasm_invocation_trace(event, invocation, enrichment)
+            }
         }
     }
 
@@ -295,6 +298,37 @@ impl OtelExporter {
                 self.wasm_metrics.memory_pages.record(duration_ms, &[]);
             }
         }
+
+        span.set_status(Status::Ok);
+        span.end();
+    }
+
+    fn emit_wasm_invocation_trace(
+        &self,
+        _event: &ProbeEvent,
+        invocation: &crate::probes::WasmInvocationEvent,
+        enrichment: Option<&EnrichmentData>,
+    ) {
+        let mut attributes = vec![
+            KeyValue::new("wasm.module", invocation.module_name.clone()),
+            KeyValue::new("wasm.function", invocation.function.clone()),
+            KeyValue::new("wasm.sha256", invocation.wasm_sha256.clone()),
+            KeyValue::new("wasm.args", format!("{:?}", invocation.args)),
+        ];
+
+        if let Some(inc) = enrichment {
+            attributes.push(KeyValue::new("container.id", inc.container_id.clone()));
+            attributes.push(KeyValue::new("container.image", inc.image_name.clone()));
+            attributes.push(KeyValue::new("k8s.pod.name", inc.pod_name.clone()));
+            attributes.push(KeyValue::new("k8s.namespace", inc.namespace.clone()));
+        }
+
+        let mut span = self
+            .tracer
+            .span_builder("wasm.invocation_captured")
+            .with_kind(SpanKind::Internal)
+            .with_attributes(attributes)
+            .start(&self.tracer);
 
         span.set_status(Status::Ok);
         span.end();

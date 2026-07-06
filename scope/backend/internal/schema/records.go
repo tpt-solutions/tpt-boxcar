@@ -54,3 +54,19 @@ type LogRecord struct {
 	NodeName    string            `json:"node_name"`
 	Attributes  map[string]string `json:"attributes"`
 }
+
+// WasmInvocationRecord captures a single Wasm module invocation's inputs
+// (module, function, args/env, and the exact content digest of the module
+// that ran) so it can be replayed offline later via `origin replay`. Origin
+// records these directly (via `WasmProbe::record_invocation`) rather than
+// via a kernel-level eBPF hook — see Phase 10 Slice 3 for the scope note.
+type WasmInvocationRecord struct {
+	Timestamp   time.Time `json:"timestamp"`
+	ModuleName  string    `json:"module_name"`
+	Function    string    `json:"function"`
+	ArgsJSON    string    `json:"args_json"`
+	EnvJSON     string    `json:"env_json"`
+	WasmSha256  string    `json:"wasm_sha256"`
+	ServiceName string    `json:"service_name"`
+	ContainerID string    `json:"container_id"`
+}

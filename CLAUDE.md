@@ -130,7 +130,5 @@ cd origin/gui && npm run lint
 ### Plugin System (Frontier)
 Wasm plugins expose a host ABI defined in `frontier/plugin-sdk/`. Two SDKs: Rust (`frontier/plugin-sdk/`) and TypeScript (`frontier/typescript-sdk/`). Example plugins live in `frontier/examples/`. Plugins are loaded by Wasmtime in the proxy and can be hot-swapped without dropping connections.
 
-### Key Open Items (Phase 9 — Driver Parity & Correctness)
-See `TODO.md` for the full list. Phase 7/8 items (JWT verification, Frontier REST auth, ClickHouse password env var, mock-data wiring) are complete. Remaining known gaps:
-- Postgres wire driver `execute()` doesn't report real affected-row counts for parameterized statements (`tether/proxy/src/drivers/wire_postgres.rs`)
-- MySQL wire driver prepared-statement binary resultset decoding is stubbed, and `execute()` ignores bound parameters entirely (`tether/proxy/src/drivers/wire_mysql.rs`)
+### Key Open Items (Phase 11 — Docker-Replacement Hardening)
+Phase 9 (Tether driver parity/correctness) is complete — both wire drivers report real affected-row counts and decode binary resultsets correctly; see `TODO.md` if you need the history. Current work is Phase 11: closing stub/placeholder gaps found across all five products (Origin containerd integration and networking/DNS/resource-limit/health-check hardening, Frontier plugin `ResourceLimiter` enforcement, Chisel real Wasm compilation and SBOM/CVE scanning, Scope real eBPF probes, and a cross-product `boxcar.yaml` manifest). See `TODO.md` for the full task list.

@@ -4,10 +4,25 @@ use std::time::Duration;
 use tpt_origin_core::dns::DnsResolver;
 use tpt_origin_core::lifecycle::LifecycleManager;
 use tpt_origin_core::manifest::{
-    Manifest, OCIService, PortMapping, Service, VolumeMount, WasmService,
+    Manifest, ProcessService, Service, WasmService,
 };
 use tpt_origin_core::network::{NetworkConfig, NetworkManager};
 use tpt_origin_core::runtime::ServiceStatus;
+
+/// A real, short-lived-but-not-instant command available on every platform
+/// this test runs on, standing in for what used to be two `Service::OCI`
+/// entries here. Those became a real, Linux+containerd-only integration
+/// (see `containerd::tests` for the dedicated, `#[ignore]`-gated real-pull
+/// test) — this "flywheel" test's actual purpose is exercising Origin's
+/// DNS/network/lifecycle bookkeeping feeding into Scope, not containerd
+/// itself, so a portable process stand-in keeps it meaningful cross-platform.
+fn long_running_command() -> Vec<String> {
+    if cfg!(windows) {
+        vec!["ping".to_string(), "-n".to_string(), "20".to_string(), "127.0.0.1".to_string()]
+    } else {
+        vec!["sleep".to_string(), "20".to_string()]
+    }
+}
 
 use tpt_scope_agent::enrichment::EnrichmentProvider;
 use tpt_scope_agent::probes::{
@@ -21,26 +36,14 @@ fn flywheel_manifest(wasm_path: std::path::PathBuf) -> Manifest {
 
     services.insert(
         "db".to_string(),
-        Service::OCI(OCIService {
-            image: "postgres:16-alpine".to_string(),
-            ports: vec![PortMapping {
-                host: 5432,
-                container: 5432,
-                protocol: "tcp".to_string(),
-            }],
+        Service::Process(ProcessService {
+            command: long_running_command(),
             environment: HashMap::from([(
                 "POSTGRES_PASSWORD".to_string(),
                 "test".to_string(),
             )]),
-            volumes: vec![VolumeMount {
-                source: "pgdata".to_string(),
-                target: "/var/lib/postgresql/data".to_string(),
-                read_only: false,
-            }],
-            command: None,
+            working_dir: None,
             depends_on: vec![],
-            healthcheck: None,
-            resources: None,
         }),
     );
 
@@ -55,24 +58,18 @@ fn flywheel_manifest(wasm_path: std::path::PathBuf) -> Manifest {
             )]),
             memory_limit: Some("256m".to_string()),
             depends_on: vec!["db".to_string()],
+            expected_signature: None,
+            trusted_public_key: None,
         }),
     );
 
     services.insert(
         "proxy".to_string(),
-        Service::OCI(OCIService {
-            image: "nginx:alpine".to_string(),
-            ports: vec![PortMapping {
-                host: 443,
-                container: 443,
-                protocol: "tcp".to_string(),
-            }],
+        Service::Process(ProcessService {
+            command: long_running_command(),
             environment: HashMap::new(),
-            volumes: vec![],
-            command: None,
+            working_dir: None,
             depends_on: vec!["api".to_string()],
-            healthcheck: None,
-            resources: None,
         }),
     );
 
@@ -109,6 +106,11 @@ async fn test_flywheel_origin_to_scope() {
     std::fs::write(&wasm_path, b"\0asm\x01\x00\x00\x00").unwrap();
 
     // --- Origin: lifecycle management ---
+    // Bind DNS to an ephemeral port rather than the real 5353: this test
+    // runs in parallel with others in the same process, and the standard
+    // mDNS port can legitimately already be held by something else on the
+    // host (a system resolver, a port-exclusion range, etc).
+    std::env::set_var("ORIGIN_DNS_LISTEN_ADDR", "127.0.0.1:0");
     let manifest = flywheel_manifest(wasm_path.clone());
     let mut lifecycle = LifecycleManager::new(&manifest);
 

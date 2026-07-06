@@ -25,3 +25,9 @@ http-body-util = "0.1"
 http = "1"
 rustls = "0.23"
 base64 = "0.22"
+ed25519-dalek = { version = "2", features = ["rand_core"] }
+wasmparser = "0.221"
+which = "6"
+
+[dev-dependencies]
+tempfile = "3"

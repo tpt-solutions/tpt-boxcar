@@ -1,0 +1,78 @@
+package tpt:tether@0.1.0;
+
+/// Shared value/record/error types used by both the `data` and `kv` interfaces.
+interface types {
+    /// A single cell value. Mirrors the subset of `serde_json::Value` that the
+    /// wire drivers actually produce/consume; JSON objects/arrays are not
+    /// representable at the WIT boundary and are not needed by any driver today.
+    variant value {
+        %null,
+        %bool(bool),
+        int(s64),
+        float(f64),
+        text(string),
+    }
+
+    /// A tabular query result: column names plus a flat list of cell values.
+    record query-row {
+        columns: list<string>,
+        values: list<value>,
+    }
+
+    /// Typed error boundary. Internal driver code keeps using `anyhow::Error`;
+    /// this variant is only what crosses the host/guest component boundary.
+    variant tether-error {
+        not-connected,
+        driver-error(string),
+        unsupported-operation(string),
+        timeout,
+    }
+}
+
+/// Query/execute/transaction operations, backed by whichever `WireDriver`
+/// (Postgres, MySQL, Redis) the host has connected.
+interface data {
+    use types.{value, query-row, tether-error};
+
+    query: func(sql: string, params: list<value>) -> result<query-row, tether-error>;
+    execute: func(sql: string, params: list<value>) -> result<u64, tether-error>;
+
+    /// A transaction handle. Guests call `query`/`execute` against it, then
+    /// must call exactly one of `commit`/`rollback` to consume it.
+    resource transaction {
+        query: func(sql: string, params: list<value>) -> result<query-row, tether-error>;
+        execute: func(sql: string, params: list<value>) -> result<u64, tether-error>;
+        commit: static func(self: transaction) -> result<_, tether-error>;
+        rollback: static func(self: transaction) -> result<_, tether-error>;
+    }
+
+    begin-transaction: func() -> result<transaction, tether-error>;
+}
+
+/// Key-value operations. Only meaningful when the host driver is Redis;
+/// calling these against a non-KV-capable driver returns `unsupported-operation`.
+///
+/// NOTE: pub/sub is intentionally not part of this interface yet. A long-lived
+/// subscription doesn't map cleanly onto WIT's synchronous call/return shape —
+/// it needs either a `wasi:io/streams`-based design or a polling API, which is
+/// real design work deferred to a future v2 (see TODO.md Phase 10).
+interface kv {
+    use types.{tether-error};
+
+    get: func(key: string) -> result<option<string>, tether-error>;
+    set: func(key: string, value: string) -> result<_, tether-error>;
+    del: func(key: string) -> result<u64, tether-error>;
+    expire: func(key: string, ttl-secs: u64) -> result<bool, tether-error>;
+}
+
+/// The world a Wasm guest imports to talk to Tether.
+///
+/// `run` is an example entry point exported by `tether/examples/wit-guest-demo`
+/// so the host (and `component_test.rs`) has something to call; it is not part
+/// of the core `tpt:tether` interface contract, just this demo world's shape.
+world tether-guest {
+    import data;
+    import kv;
+
+    export run: func() -> string;
+}

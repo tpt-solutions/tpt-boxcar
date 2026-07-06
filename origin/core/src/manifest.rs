@@ -26,6 +26,18 @@ pub enum Service {
     Process(ProcessService),
 }
 
+impl Service {
+    /// Names of services this one depends on, used to order startup so a
+    /// service isn't started before what it needs is already up.
+    pub fn depends_on(&self) -> &[String] {
+        match self {
+            Service::OCI(s) => &s.depends_on,
+            Service::Wasm(s) => &s.depends_on,
+            Service::Process(s) => &s.depends_on,
+        }
+    }
+}
+
 /// A native process service: runs a pre-built binary directly (no
 /// containerd/Wasmtime involved). Useful for driving already-compiled
 /// control-plane binaries (e.g. the Go control planes) from an Origin
@@ -71,6 +83,15 @@ pub struct WasmService {
     pub memory_limit: Option<String>,
     #[serde(default)]
     pub depends_on: Vec<String>,
+    /// Hex-encoded ed25519 signature over the module's compiled wasm bytes,
+    /// produced by Chisel's `WasmPipeline::sign_module`. If set alongside
+    /// `trusted_public_key`, Origin verifies it before instantiation and
+    /// refuses to load on mismatch. If either is unset, the module loads
+    /// unverified (backward compatible with existing manifests).
+    #[serde(default)]
+    pub expected_signature: Option<String>,
+    #[serde(default)]
+    pub trusted_public_key: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

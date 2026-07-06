@@ -11,7 +11,7 @@ pub use wire_mysql::MysqlWireDriver;
 pub use wire_postgres::PostgresWireDriver;
 pub use wire_redis::{RedisWireDriver, RespFrame};
 
-use crate::auth::DbCredentials;
+use crate::auth::ScopedCredentials;
 use crate::tls::TlsConfig;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -19,7 +19,7 @@ pub struct DatabaseConfig {
     pub host: String,
     pub port: u16,
     pub database: String,
-    pub credentials: DbCredentials,
+    pub credentials: ScopedCredentials,
     #[serde(default)]
     pub tls: Option<TlsConfig>,
     #[serde(default = "default_max_connections")]
@@ -46,13 +46,14 @@ fn default_idle_timeout() -> u64 {
 }
 
 impl DatabaseConfig {
-    pub fn connection_string(&self) -> Result<String> {
-        let creds = &self.credentials;
-        let password = creds.password().context("failed to resolve password")?;
-        let username = creds.username().context("failed to resolve username")?;
+    pub fn connection_string(&self, caller: Option<&str>) -> Result<String> {
+        let resolved = self
+            .credentials
+            .resolve_for(caller)
+            .context("failed to resolve scoped credentials")?;
         Ok(format!(
             "postgres://{}:{}@{}:{}/{}",
-            username, password, self.host, self.port, self.database
+            resolved.username, resolved.password, self.host, self.port, self.database
         ))
     }
 }

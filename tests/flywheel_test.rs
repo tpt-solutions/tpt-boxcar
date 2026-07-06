@@ -55,6 +55,8 @@ fn flywheel_manifest(wasm_path: std::path::PathBuf) -> Manifest {
             )]),
             memory_limit: Some("256m".to_string()),
             depends_on: vec!["db".to_string()],
+            expected_signature: None,
+            trusted_public_key: None,
         }),
     );
 

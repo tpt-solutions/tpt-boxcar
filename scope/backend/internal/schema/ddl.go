@@ -92,3 +92,28 @@ PARTITION BY toYYYYMM(timestamp)
 ORDER BY (event_type, timestamp)
 TTL timestamp + INTERVAL 7 DAY
 SETTINGS index_granularity = 8192`
+
+// CreateWasmInvocationsTable stores captured Wasm module invocations for
+// offline replay/time-travel debugging (Phase 10 Slice 3). Modeled on
+// scope_raw_events, but with a dedicated schema for module/function/args
+// rather than a generic string blob, since replay needs structured access
+// to each field. Retention defaults to 30 days (longer than raw_events'
+// 7-day TTL) since replay debugging benefits from a longer window; treat
+// as a config knob to revisit if storage becomes a concern.
+const CreateWasmInvocationsTable = `
+CREATE TABLE IF NOT EXISTS scope_wasm_invocations (
+    timestamp     DateTime64(9, 'UTC'),
+    module_name   LowCardinality(String),
+    function      String,
+    args_json     String,
+    env_json      String,
+    wasm_sha256   String,
+    service_name  String,
+    container_id  String,
+    INDEX idx_module module_name TYPE set(100) GRANULARITY 4,
+    INDEX idx_sha256 wasm_sha256 TYPE bloom_filter GRANULARITY 4
+) ENGINE = MergeTree()
+PARTITION BY toYYYYMM(timestamp)
+ORDER BY (module_name, timestamp)
+TTL timestamp + INTERVAL 30 DAY
+SETTINGS index_granularity = 8192`

@@ -2,10 +2,17 @@ use anyhow::Result;
 
 use crate::wit::TetherWit;
 
+#[deprecated(
+    since = "0.2.0",
+    note = "superseded by the real wasmtime component instantiation path in `crate::component`; \
+            this JSON-serializing shim predates the actual WIT bindings and is kept only for \
+            existing callers during the transition"
+)]
 pub struct ComponentizeP2 {
     wit: TetherWit,
 }
 
+#[allow(deprecated)]
 impl ComponentizeP2 {
     pub fn new() -> Self {
         Self {
@@ -28,12 +35,14 @@ impl ComponentizeP2 {
     }
 }
 
+#[allow(deprecated)]
 impl Default for ComponentizeP2 {
     fn default() -> Self {
         Self::new()
     }
 }
 
+#[allow(deprecated)]
 pub async fn handle_query(
     component: &ComponentizeP2,
     sql: String,
@@ -46,6 +55,7 @@ pub async fn handle_query(
     Ok(serde_json::to_string(&result)?)
 }
 
+#[allow(deprecated)]
 pub async fn handle_execute(
     component: &ComponentizeP2,
     sql: String,

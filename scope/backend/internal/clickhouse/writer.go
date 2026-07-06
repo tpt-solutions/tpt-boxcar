@@ -55,6 +55,7 @@ func (w *Writer) EnsureTables(ctx context.Context) error {
 		schema.CreateMetricsTable,
 		schema.CreateLogsTable,
 		schema.CreateRawEventsTable,
+		schema.CreateWasmInvocationsTable,
 	} {
 		if err := w.conn.Exec(ctx, ddl); err != nil {
 			return fmt.Errorf("exec DDL: %w", err)
@@ -126,6 +127,48 @@ func (w *Writer) WriteLogs(ctx context.Context, records []schema.LogRecord) erro
 		}
 	}
 	return batch.Send()
+}
+
+// WriteWasmInvocations inserts a batch of WasmInvocationRecords using the
+// native batch protocol, for offline replay/time-travel debugging.
+func (w *Writer) WriteWasmInvocations(ctx context.Context, records []schema.WasmInvocationRecord) error {
+	if len(records) == 0 {
+		return nil
+	}
+	batch, err := w.conn.PrepareBatch(ctx, "INSERT INTO scope_wasm_invocations")
+	if err != nil {
+		return fmt.Errorf("prepare wasm invocations batch: %w", err)
+	}
+	for _, r := range records {
+		if err := batch.Append(
+			r.Timestamp, r.ModuleName, r.Function, r.ArgsJSON, r.EnvJSON,
+			r.WasmSha256, r.ServiceName, r.ContainerID,
+		); err != nil {
+			return fmt.Errorf("append wasm invocation: %w", err)
+		}
+	}
+	return batch.Send()
+}
+
+// GetWasmInvocation fetches a single captured invocation by its row
+// position within a module's history (id), for `origin replay` to consume
+// offline. Returns nil if not found.
+func (w *Writer) GetWasmInvocation(ctx context.Context, moduleName, id string) (*schema.WasmInvocationRecord, error) {
+	row := w.conn.QueryRow(ctx, `
+		SELECT timestamp, module_name, function, args_json, env_json, wasm_sha256, service_name, container_id
+		FROM scope_wasm_invocations
+		WHERE module_name = ? AND wasm_sha256 = ?
+		ORDER BY timestamp DESC
+		LIMIT 1`, moduleName, id)
+
+	var r schema.WasmInvocationRecord
+	if err := row.Scan(
+		&r.Timestamp, &r.ModuleName, &r.Function, &r.ArgsJSON, &r.EnvJSON,
+		&r.WasmSha256, &r.ServiceName, &r.ContainerID,
+	); err != nil {
+		return nil, fmt.Errorf("scan wasm invocation: %w", err)
+	}
+	return &r, nil
 }
 
 // Close shuts down the connection.

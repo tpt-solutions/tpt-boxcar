@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 
-use anyhow::Result;
+use anyhow::{Context, Result};
 use chrono::Utc;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -8,6 +8,7 @@ use tracing::info;
 use uuid::Uuid;
 
 use crate::analyzer::{AnalysisResult, Dependency, WasmCompatibility};
+use crate::wasm_pipeline::{WasmModule, WasmModuleSignature, WasmPipeline};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum SbomFormat {
@@ -84,6 +85,7 @@ pub struct DistilledImage {
     pub cve_scan: CveScanResult,
     pub wasm_migration_path: Option<WasmMigrationPath>,
     pub distillation_ratio: f64,
+    pub wasm_signature: Option<WasmModuleSignature>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -141,9 +143,38 @@ impl Distiller {
             cve_scan,
             wasm_migration_path: wasm_path,
             distillation_ratio: ratio,
+            wasm_signature: None,
         };
 
         Ok(distilled)
+    }
+
+    /// Distills as `distill()` does, and additionally signs the given
+    /// compiled `WasmModule`'s bytes with the key read from
+    /// `CHISEL_SIGNING_KEY` (hex-encoded ed25519 secret key). Key
+    /// management/KMS integration is out of scope — this is a BYO-key
+    /// scheme, matching the "no PKI infra in this repo" constraint.
+    pub fn distill_and_sign_wasm(
+        &self,
+        analysis: &AnalysisResult,
+        wasm_module: &WasmModule,
+    ) -> Result<DistilledImage> {
+        let mut distilled = self.distill(analysis)?;
+        let signing_key = Self::signing_key_from_env()?;
+        let pipeline = WasmPipeline::new();
+        distilled.wasm_signature = Some(pipeline.sign_module(wasm_module, &signing_key)?);
+        Ok(distilled)
+    }
+
+    fn signing_key_from_env() -> Result<ed25519_dalek::SigningKey> {
+        let hex_key = std::env::var("CHISEL_SIGNING_KEY").context(
+            "CHISEL_SIGNING_KEY env var not set; required to sign a wasm migration artifact",
+        )?;
+        let bytes = hex::decode(hex_key.trim()).context("CHISEL_SIGNING_KEY is not valid hex")?;
+        let key_bytes: [u8; 32] = bytes
+            .try_into()
+            .map_err(|_| anyhow::anyhow!("CHISEL_SIGNING_KEY must decode to 32 bytes"))?;
+        Ok(ed25519_dalek::SigningKey::from_bytes(&key_bytes))
     }
 
     fn generate_sbom(&self, dependencies: &[Dependency]) -> Result<SbomDocument> {
@@ -361,6 +392,17 @@ impl Distiller {
         lines.push("USER nonroot:nonroot".to_string());
         lines.push(String::new());
         lines.push("LABEL org.opencontainers.image.title=\"distilled\"".to_string());
+
+        if let Some(sig) = &distilled.wasm_signature {
+            lines.push(format!(
+                "LABEL org.opencontainers.image.wasm.signature=\"{}\"",
+                sig.signature
+            ));
+            lines.push(format!(
+                "LABEL org.opencontainers.image.wasm.pubkey=\"{}\"",
+                sig.public_key
+            ));
+        }
 
         lines.join("\n")
     }

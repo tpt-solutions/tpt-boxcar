@@ -24,7 +24,7 @@ fn sample_manifest(wasm_path: std::path::PathBuf) -> Manifest {
                 read_only: false,
             }],
             command: None,
-            depends_on: vec!["db".to_string()],
+            depends_on: vec![],
             healthcheck: None,
             resources: None,
         }),
@@ -37,6 +37,8 @@ fn sample_manifest(wasm_path: std::path::PathBuf) -> Manifest {
             environment: HashMap::new(),
             memory_limit: Some("128m".to_string()),
             depends_on: vec!["api".to_string()],
+            expected_signature: None,
+            trusted_public_key: None,
         }),
     );
 
@@ -81,7 +83,7 @@ fn test_manifest_parse_oci_and_wasm_services() {
             assert_eq!(oci.image, "node:20-alpine");
             assert_eq!(oci.ports.len(), 1);
             assert_eq!(oci.ports[0].host, 3000);
-            assert_eq!(oci.depends_on, vec!["db"]);
+            assert!(oci.depends_on.is_empty());
             assert_eq!(oci.volumes.len(), 1);
             assert_eq!(oci.volumes[0].target, "/data");
         }

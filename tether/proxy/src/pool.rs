@@ -107,7 +107,9 @@ impl ConnectionPool {
         info!(min_size = min, "initializing connection pool");
 
         for _ in 0..min {
-            let conn = self.create_connection().await?;
+            // Pre-warmed connections have no specific caller yet; they use
+            // the default credentials until claimed by `acquire()`.
+            let conn = self.create_connection(None).await?;
             let id = self
                 .next_id
                 .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
@@ -120,19 +122,21 @@ impl ConnectionPool {
         Ok(())
     }
 
-    async fn create_connection(&self) -> Result<PooledConnection> {
+    async fn create_connection(&self, caller: Option<&str>) -> Result<PooledConnection> {
         let mut driver = WireDriver::Postgres(crate::drivers::PostgresWireDriver::new());
-        let creds = &self.db_config.credentials;
-        let username = creds.username().context("failed to resolve username")?;
-        let password = creds.password().context("failed to resolve password")?;
+        let resolved = self
+            .db_config
+            .credentials
+            .resolve_for(caller)
+            .context("failed to resolve scoped credentials")?;
 
         driver
             .connect(
                 &self.db_config.host,
                 self.db_config.port,
                 &self.db_config.database,
-                &username,
-                &password,
+                &resolved.username,
+                &resolved.password,
             )
             .await?;
 
@@ -144,7 +148,12 @@ impl ConnectionPool {
         })
     }
 
-    pub async fn acquire(&self) -> Result<PooledConnectionGuard<'_>> {
+    /// Acquires a connection scoped to the given caller id (e.g. an Origin
+    /// Wasm service name). New connections are created using credentials
+    /// resolved for that caller; idle connections reused from the pool are
+    /// NOT re-scoped per caller in this slice (a documented limitation —
+    /// only freshly created connections get caller-scoped credentials).
+    pub async fn acquire(&self, caller: Option<&str>) -> Result<PooledConnectionGuard<'_>> {
         let timeout = Duration::from_secs(self.config.acquire_timeout_secs);
 
         let permit = tokio::time::timeout(timeout, self.semaphore.clone().acquire_owned())
@@ -184,12 +193,12 @@ impl ConnectionPool {
             }
         }
 
-        let conn = self.create_connection().await?;
+        let conn = self.create_connection(caller).await?;
         let id = self
             .next_id
             .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         self.connections.insert(id, Mutex::new(conn));
-        debug!(id, "created new connection");
+        debug!(id, caller = caller.unwrap_or("<none>"), "created new connection");
 
         Ok(PooledConnectionGuard {
             id,

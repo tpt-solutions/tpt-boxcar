@@ -26,10 +26,12 @@ jsonwebtoken = "9"
 parking_lot = "0.12"
 rand = "0.8"
 base64 = "0.22"
+oci-client = "0.13"
 
 [dev-dependencies]
 criterion = { version = "0.5", features = ["html_reports"] }
 tokio = { workspace = true, features = ["full"] }
+wat = "1"
 
 [[bench]]
 name = "proxy_bench"

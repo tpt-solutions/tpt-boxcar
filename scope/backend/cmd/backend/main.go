@@ -60,6 +60,19 @@ type WasmModule struct {
 	MemoryMB        string `json:"memoryMB"`
 }
 
+// WasmInvocation is a captured Wasm module invocation's inputs, fetched by
+// `origin replay` to re-run a module offline with identical args/env.
+type WasmInvocation struct {
+	Timestamp   string            `json:"timestamp"`
+	ModuleName  string            `json:"moduleName"`
+	Function    string            `json:"function"`
+	Args        []string          `json:"args"`
+	Env         map[string]string `json:"env"`
+	WasmSha256  string            `json:"wasmSha256"`
+	ServiceName string            `json:"serviceName"`
+	ContainerID string            `json:"containerId"`
+}
+
 // --- Server ---
 
 type QueryServer struct {
@@ -502,6 +515,48 @@ func (qs *QueryServer) handleWasm(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, modules)
 }
 
+// handleWasmInvocation fetches a single captured Wasm invocation by module
+// name and wasm content sha256, for `origin replay` to re-run offline with
+// the same args/env. Returns 404 if no matching invocation was captured.
+func (qs *QueryServer) handleWasmInvocation(w http.ResponseWriter, r *http.Request) {
+	ctx, cancel := context.WithTimeout(r.Context(), 10*time.Second)
+	defer cancel()
+
+	module := r.URL.Query().Get("module")
+	sha256 := r.URL.Query().Get("sha256")
+	if module == "" || sha256 == "" {
+		http.Error(w, `{"error":"module and sha256 query params are required"}`, http.StatusBadRequest)
+		return
+	}
+
+	row := qs.db.QueryRow(ctx, `
+		SELECT toUnixTimestamp64Milli(timestamp), module_name, function, args_json, env_json, wasm_sha256, service_name, container_id
+		FROM scope_wasm_invocations
+		WHERE module_name = ? AND wasm_sha256 = ?
+		ORDER BY timestamp DESC
+		LIMIT 1`, module, sha256)
+
+	var (
+		timestampMs int64
+		inv         WasmInvocation
+		argsJSON    string
+		envJSON     string
+	)
+	if err := row.Scan(&timestampMs, &inv.ModuleName, &inv.Function, &argsJSON, &envJSON, &inv.WasmSha256, &inv.ServiceName, &inv.ContainerID); err != nil {
+		http.Error(w, `{"error":"no captured invocation found"}`, http.StatusNotFound)
+		return
+	}
+	inv.Timestamp = fmt.Sprintf("%d", timestampMs)
+	if err := json.Unmarshal([]byte(argsJSON), &inv.Args); err != nil {
+		inv.Args = []string{}
+	}
+	if err := json.Unmarshal([]byte(envJSON), &inv.Env); err != nil {
+		inv.Env = map[string]string{}
+	}
+
+	writeJSON(w, inv)
+}
+
 func (qs *QueryServer) handleHealth(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := context.WithTimeout(r.Context(), 3*time.Second)
 	defer cancel()
@@ -551,6 +606,7 @@ func main() {
 	mux.HandleFunc("GET /api/v1/logs", apiKeyMiddleware(qs.handleLogs))
 	mux.HandleFunc("GET /api/v1/logs/stream", apiKeyMiddleware(qs.handleLogsStream))
 	mux.HandleFunc("GET /api/v1/wasm", apiKeyMiddleware(qs.handleWasm))
+	mux.HandleFunc("GET /api/v1/wasm-invocations", apiKeyMiddleware(qs.handleWasmInvocation))
 	mux.HandleFunc("GET /health", qs.handleHealth)
 	mux.Handle("GET /metrics", MetricsHandler())
 

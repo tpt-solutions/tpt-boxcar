@@ -1,0 +1,9 @@
+[package]
+name = "hello-wasm-crate"
+version = "0.1.0"
+edition = "2021"
+
+# Empty [workspace] table marks this as its own workspace root so `cargo
+# build` run from inside this directory does not try to join the parent
+# tpt-boxcar workspace (which does not list this fixture as a member).
+[workspace]
