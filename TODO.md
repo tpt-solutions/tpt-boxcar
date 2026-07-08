@@ -418,10 +418,50 @@
 
 ### Scope
 
-- [ ] Real eBPF probes via `aya` — `probes.rs`'s `NetworkProbe`/`SyscallProbe` are still in-memory state machines with no `aya` dependency; needs a new (non-workspace-member) `scope/ebpf/` crate with a real kprobe (e.g. on `tcp_connect`), built via `aya-build`, feeding real captured events into the existing OTLP pipeline in `otel.rs`. Comparable effort/risk to the containerd and network-bridge work.
+- [x] Real eBPF probes via `aya` — `scope/ebpf/` (non-workspace-member) has a real `tcp_connect` kprobe + three syscall kprobes (`openat`, `read`, `write`) built via `aya-build` with separate `SYSCALL_EVENTS` ring buffer; `SyscallProbeLoader` drains events from a background thread, `EbpfSyscallProbe` (cfg-gated `#[cfg(all(target_os = "linux", feature = "ebpf"))]`) wraps the loader and converts `SyscallEvent` → `ProbeEvent` for the existing OTLP pipeline in `otel.rs`. Follow-up: kretprobes for fd/return-code capture, arm64 support, path resolution, `execve` tracing.
 
 ### Docs / hygiene
 
 - [x] `CLAUDE.md`'s "Key Open Items" section was stale, listing two already-fixed Tether driver bugs as open — corrected to point at this phase instead
 - [x] `TODO.md`'s Phase 0 checkmarks for containerd integration and eBPF networking were inaccurate against the actual source — corrected above with inline notes rather than silently left wrong
 - [ ] Commit the substantial pre-existing uncommitted work found in `git status` (Tether WIT/component-model support, Origin/Chisel wasm-signing, Frontier OCI-plugin-source, Scope backend/schema work, docs/scripts housekeeping) in logically grouped commits — not yet done, pending explicit go-ahead before running `git commit`
+
+---
+
+## Phase 12 — Docker Parity (Closing the gap with `docker run` / `docker compose`)
+
+> Prioritized from the competitive analysis: TPT Boxcar vs Docker feature gap report.
+
+### P0: Critical (Blocks basic Docker replacement workflow)
+
+- [x] Port mapping enforcement — `PortMapping` in manifest parsed but never enforced; added `PortMapper` (`origin/core/src/portmap.rs`) with TCP proxy that listens on `0.0.0.0:host_port` and forwards to `container_ip:container_port` using `tokio::io::copy_bidirectional`; wired into `LifecycleManager::up/restart/reap_and_restart/down`; `ports` field added to `ProcessService` and `WasmService`; cross-platform (no iptables dependency); verified with `proxy_forwards_bytes` test
+- [ ] `tpt origin exec` — currently a print stub (`cli/main.rs:322-325`); needs real implementation: for OCI services use `ctr tasks exec` (pattern exists in `containerd/mod.rs::exec_healthcheck`), for process services use `tokio::process::Command` with PTY
+- [ ] Dockerfile / image build — Origin can only run pre-built images; need `tpt origin build` that parses Dockerfiles, executes multi-stage builds via containerd/buildkit, produces OCI images
+
+### P1: High Priority (Significant DX or security gaps)
+
+- [ ] Resource limits for process/Wasm services — partially built, not wired in yet: `origin/core/src/reslimit.rs` adds `parse_memory_limit`/`parse_cpu_limit` (docker-style `"512m"`/`"1g"`/bare-byte strings), a `#[cfg(unix)] apply_rlimits()` helper (`RLIMIT_AS`/`RLIMIT_CPU` via `libc::setrlimit`, meant for a `Command::pre_exec` hook), and a `WasmResourceLimiter` implementing `wasmtime::ResourceLimiter` (denies memory growth past a byte cap; table growth still unconditionally allowed) — all covered by unit tests. `ProcessService`/`WasmService` in `manifest.rs` gained a `resources: Option<ResourceLimits>` field to carry the config. None of this is actually called anywhere yet: `runtime.rs`'s process spawn (`Command::new`, line ~436) never calls `apply_rlimits`/`pre_exec`, and its Wasm `Store::new` (line ~159) never attaches a `WasmResourceLimiter` via `Store::limiter()`. Remaining work is purely the wiring, not new logic.
+- [ ] Secrets management — add `env_file:` directive to manifest schema (Docker's `--env-file`), support `.env` file loading; add `secrets:` section for Docker/K8s secrets mounted as files
+- [ ] Security hardening — add `security:` section with `cap_add`/`cap_drop`, `read_only: true`, `no_new_privileges: true`; for OCI pass `--cap-drop ALL --cap-add <specific>` to `ctr run`, for process use Linux capabilities via `prctl`
+- [ ] File sync / watch mode — add `--watch` flag to `tpt origin up` that monitors source directories for changes and triggers service restart; critical for developer iteration speed
+- [ ] Rootless mode — implement user namespace support so `tpt origin up` works without root; needs unprivileged network setup via `slirp4netns` or similar
+
+### P2: Medium Priority (Completes the Docker feature set)
+
+- [ ] Log rotation and drivers — add `logging:` section to manifest with `driver`, `max_size`, `max_file`; implement in-process log rotation for OCI containers
+- [ ] `tpt origin inspect` — show full service configuration, environment, volume mounts, network settings, health status
+- [ ] `tpt origin stats` — live CPU/memory/network usage per service; for OCI read cgroup stats via containerd, for process read `/proc/<pid>/stat`
+- [ ] Health check for non-OCI services — process services could use HTTP/TCP health checks (open socket, check response)
+- [ ] Compose feature parity — add variable interpolation (`${VAR:-default}`), `profiles:`, `extends:`, `build:` section, `configs:`, `secrets:` to manifest schema
+- [ ] OCI push — implement `tpt origin push` to push built images to registries with token-based auth
+- [ ] Image management — `tpt origin images` (list), `tpt origin rmi` (remove), `tpt origin pull` (explicit pull command)
+
+### P3: Low Priority (Nice-to-have)
+
+- [ ] `docker events` equivalent — real-time event stream for lifecycle transitions
+- [ ] `docker cp` equivalent — file copy to/from containers
+- [ ] IPv6 support — dual-stack networking, AAAA records in DNS
+- [ ] Overlay networks — multi-host networking
+- [ ] tmpfs mounts — in-memory filesystem for temp data
+- [ ] GPU/device passthrough — for ML/AI workloads
+- [ ] `docker pause`/`unpause` — cgroup freezer integration

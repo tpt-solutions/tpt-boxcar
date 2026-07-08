@@ -38,6 +38,7 @@ fn flywheel_manifest(wasm_path: std::path::PathBuf) -> Manifest {
         "db".to_string(),
         Service::Process(ProcessService {
             command: long_running_command(),
+            ports: vec![],
             environment: HashMap::from([(
                 "POSTGRES_PASSWORD".to_string(),
                 "test".to_string(),
@@ -53,6 +54,7 @@ fn flywheel_manifest(wasm_path: std::path::PathBuf) -> Manifest {
         Service::Wasm(WasmService {
             path: wasm_path,
             args: vec!["--port".to_string(), "8080".to_string()],
+            ports: vec![],
             environment: HashMap::from([(
                 "DATABASE_URL".to_string(),
                 "postgres://test@db/app".to_string(),
@@ -69,6 +71,7 @@ fn flywheel_manifest(wasm_path: std::path::PathBuf) -> Manifest {
         "proxy".to_string(),
         Service::Process(ProcessService {
             command: long_running_command(),
+            ports: vec![],
             environment: HashMap::new(),
             working_dir: None,
             depends_on: vec!["api".to_string()],

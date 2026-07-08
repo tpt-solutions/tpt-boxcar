@@ -10,6 +10,9 @@ use crate::manifest::{Manifest, OCIService, ProcessService, RestartPolicy, Servi
 #[cfg(all(target_os = "linux", feature = "containerd"))]
 use crate::containerd::{ContainerSpec, ContainerdClient};
 
+#[cfg(unix)]
+use std::os::unix::process::CommandExt;
+
 /// Parses a docker-style memory limit string (`"512m"`, `"1g"`, `"128Mi"`,
 /// a bare byte count) into a byte count for `ContainerSpec.memory_limit_bytes`.
 /// Returns `None` (rather than a default) on anything it can't parse, so
@@ -133,16 +136,22 @@ pub enum ServiceStatus {
 /// which speak a custom host ABI and have no WASI dependency at all).
 struct OriginWasiState {
     wasi: WasiP1Ctx,
+    limiter: Option<crate::reslimit::WasmResourceLimiter>,
 }
 
 /// Compiles, instantiates, and invokes a Wasm module's `_start` entry point
 /// with the given args/env. Deliberately takes no `RuntimeManager` state so
 /// it can also be driven standalone (e.g. by an offline replay path) without
 /// pulling in the rest of Origin's bookkeeping.
+///
+/// `memory_limit_bytes`, when set, caps the module's linear memory growth via
+/// a `wasmtime::ResourceLimiter` — denied growth traps the module rather than
+/// letting it exhaust host memory.
 pub fn instantiate_and_run(
     wasm_bytes: &[u8],
     args: &[String],
     env: &HashMap<String, String>,
+    memory_limit_bytes: Option<u64>,
 ) -> Result<()> {
     let engine = wasmtime::Engine::new(&wasmtime::Config::new())
         .context("failed to create wasmtime engine")?;
@@ -155,8 +164,14 @@ pub fn instantiate_and_run(
         wasi_builder.env(key, value);
     }
     let wasi = wasi_builder.build_p1();
+    let limiter = memory_limit_bytes.map(crate::reslimit::WasmResourceLimiter::new);
 
-    let mut store = wasmtime::Store::new(&engine, OriginWasiState { wasi });
+    let mut store = wasmtime::Store::new(&engine, OriginWasiState { wasi, limiter });
+    if memory_limit_bytes.is_some() {
+        store.limiter(|state| {
+            state.limiter.as_mut().expect("limiter set when memory_limit_bytes is Some")
+        });
+    }
     let mut linker: wasmtime::Linker<OriginWasiState> = wasmtime::Linker::new(&engine);
     wasmtime_wasi::preview1::add_to_linker_sync(&mut linker, |s: &mut OriginWasiState| &mut s.wasi)
         .context("failed to wire WASI imports")?;
@@ -400,7 +415,16 @@ impl RuntimeManager {
             });
         }
 
-        let status = match instantiate_and_run(&wasm_bytes, &args, &env) {
+        // Prefer the structured `resources.memory` limit; fall back to the
+        // legacy standalone `memory_limit` field for existing manifests.
+        let memory_limit_bytes = service
+            .resources
+            .as_ref()
+            .and_then(|r| r.memory.as_deref())
+            .or(service.memory_limit.as_deref())
+            .and_then(crate::reslimit::parse_memory_limit);
+
+        let status = match instantiate_and_run(&wasm_bytes, &args, &env, memory_limit_bytes) {
             Ok(()) => ServiceStatus::Running,
             Err(e) => ServiceStatus::Failed(format!("wasm trap: {e}")),
         };
@@ -438,6 +462,30 @@ impl RuntimeManager {
         cmd.envs(&service.environment);
         if let Some(dir) = &service.working_dir {
             cmd.current_dir(dir);
+        }
+
+        // `RLIMIT_CPU` is cumulative CPU-seconds consumed before a kill signal,
+        // not a fractional-core throttle — there's no rlimit that expresses
+        // "1.5 cores", so a `resources.cpu` limit can't be honored here (a
+        // real throttle needs cgroup v2, which requires root). Only memory is
+        // applied via `RLIMIT_AS`.
+        #[cfg(unix)]
+        if let Some(resources) = &service.resources {
+            let (memory_bytes, cpu_cores) = crate::reslimit::parse_resource_limits(resources);
+            if cpu_cores.is_some() {
+                tracing::warn!(
+                    "service '{name}' requests a CPU limit, but process services can only \
+                     enforce memory limits (via RLIMIT_AS) without root/cgroups; ignoring cpu limit"
+                );
+            }
+            if memory_bytes.is_some() {
+                unsafe {
+                    cmd.pre_exec(move || {
+                        crate::reslimit::apply_rlimits(memory_bytes, None);
+                        Ok(())
+                    });
+                }
+            }
         }
 
         let mut child = cmd
@@ -691,8 +739,10 @@ mod tests {
         WasmService {
             path,
             args: vec![],
+            ports: vec![],
             environment: HashMap::new(),
             memory_limit: None,
+            resources: None,
             depends_on: vec![],
             expected_signature: None,
             trusted_public_key: None,
@@ -873,6 +923,7 @@ mod tests {
         let mut manager = RuntimeManager::new();
         let service = Service::Process(ProcessService {
             command: short_lived_command(),
+            ports: vec![],
             environment: HashMap::new(),
             working_dir: None,
             depends_on: vec![],
@@ -911,6 +962,7 @@ mod tests {
         let mut manager = RuntimeManager::new();
         let service = Service::Process(ProcessService {
             command: short_lived_command(),
+            ports: vec![],
             environment: HashMap::new(),
             working_dir: None,
             depends_on: vec![],

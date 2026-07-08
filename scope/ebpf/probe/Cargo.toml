@@ -1,0 +1,23 @@
+[package]
+name = "scope-ebpf-probe"
+version = "0.1.0"
+edition = "2021"
+license = "Apache-2.0"
+
+[[bin]]
+name = "scope-ebpf-probe"
+path = "src/main.rs"
+
+[dependencies]
+aya-ebpf = "0.1"
+scope-ebpf-common = { path = "../common" }
+
+[profile.release]
+lto = true
+panic = "abort"
+codegen-units = 1
+debug = false
+strip = true
+
+[profile.dev]
+panic = "abort"

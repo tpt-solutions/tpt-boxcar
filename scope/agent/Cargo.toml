@@ -17,3 +17,13 @@ opentelemetry-otlp = { version = "0.17", features = ["trace", "metrics", "logs"]
 opentelemetry_sdk = { version = "0.24", features = ["rt-tokio", "trace", "metrics"] }
 opentelemetry-semantic-conventions = "0.16"
 prost = "0.13"
+
+[target.'cfg(target_os = "linux")'.dependencies]
+scope-ebpf-loader = { path = "../ebpf/loader", optional = true }
+
+[features]
+# Off by default: pulls in `scope-ebpf-loader` (and transitively `aya`),
+# which only builds on Linux and needs its eBPF object compiled by a
+# nightly toolchain via `aya-build` (see scope/ebpf/loader/build.rs). Plain
+# `cargo build --workspace` never touches this path.
+ebpf = ["dep:scope-ebpf-loader"]

@@ -4,8 +4,9 @@ use std::collections::{HashMap, HashSet};
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
 use crate::dns::DnsResolver;
-use crate::manifest::Manifest;
+use crate::manifest::{Manifest, Service};
 use crate::network::NetworkManager;
+use crate::portmap::PortMapper;
 use crate::runtime::{RuntimeManager, ServiceStatus};
 
 /// Orders `manifest.services` into dependency-respecting "waves": each wave
@@ -111,6 +112,7 @@ pub struct LifecycleManager {
     runtime: RuntimeManager,
     network: NetworkManager,
     dns: DnsResolver,
+    port_mapper: PortMapper,
     health: HashMap<String, ServiceHealth>,
     manifest_name: String,
     /// Networks declared by the manifest passed to `up`, kept so `down`,
@@ -125,6 +127,7 @@ impl LifecycleManager {
             runtime: RuntimeManager::new(),
             network: NetworkManager::new(),
             dns: DnsResolver::new(),
+            port_mapper: PortMapper::new(),
             health: HashMap::new(),
             manifest_name: manifest.name.clone(),
             network_names: Vec::new(),
@@ -176,6 +179,7 @@ impl LifecycleManager {
                     health.started_at = Some(Instant::now());
                 }
                 self.connect_service_networks(name).await;
+                self.apply_port_mappings(name, service).await;
             }
         }
 
@@ -211,6 +215,39 @@ impl LifecycleManager {
         }
     }
 
+    /// Sets up TCP port-forwarding proxies for every `PortMapping` declared
+    /// by the service. For OCI services the target is the container's
+    /// allocated IP on the first declared network; for `process`/`wasm`
+    /// services the target is `127.0.0.1` (they share the host's network
+    /// namespace). The proxy is a simple accept→forward loop — lightweight
+    /// enough for local development traffic.
+    async fn apply_port_mappings(&mut self, name: &str, service: &Service) {
+        let ports = service.ports();
+        if ports.is_empty() {
+            return;
+        }
+        // Pick the container IP from the first declared network. Process/wasm
+        // services that share the host network namespace will have an
+        // allocated IP for bookkeeping/DNS but not a real separate namespace,
+        // so we use 127.0.0.1 for those (they listen on the host directly).
+        let target_ip = if self.network_names.is_empty() {
+            "127.0.0.1".to_string()
+        } else {
+            self.network
+                .assigned_ip(&self.network_names[0], name)
+                .unwrap_or("127.0.0.1")
+                .to_string()
+        };
+
+        // For process/wasm services (no real netns), the service is already
+        // reachable on localhost — but port mappings still make sense if the
+        // user wants to expose the port under a different host port number.
+        // The proxy handles that transparently.
+        if let Err(e) = self.port_mapper.apply(name, ports, &target_ip).await {
+            tracing::warn!("failed to set up port mappings for '{name}': {e:#}");
+        }
+    }
+
     /// Detaches a service from every declared network (real veth teardown
     /// where one exists) — the inverse of `connect_service_networks`.
     async fn disconnect_service_networks(&mut self, name: &str) {
@@ -223,6 +260,7 @@ impl LifecycleManager {
 
     pub async fn down(&mut self) -> Result<()> {
         tracing::info!("Tearing down environment: {}", self.manifest_name);
+        self.port_mapper.stop_all();
         for name in self.health.keys().cloned().collect::<Vec<_>>() {
             self.disconnect_service_networks(&name).await;
         }
@@ -239,6 +277,7 @@ impl LifecycleManager {
 
     pub async fn restart_service(&mut self, name: &str, manifest: &Manifest) -> Result<()> {
         tracing::info!("Restarting service: {name}");
+        self.port_mapper.stop_service(name);
         self.disconnect_service_networks(name).await;
         self.runtime.stop_service(name).await?;
         if let Some(service) = manifest.services.get(name) {
@@ -249,6 +288,7 @@ impl LifecycleManager {
                 health.started_at = Some(Instant::now());
             }
             self.connect_service_networks(name).await;
+            self.apply_port_mappings(name, service).await;
         }
         Ok(())
     }
@@ -273,6 +313,9 @@ impl LifecycleManager {
             // crash.
             self.disconnect_service_networks(name).await;
             self.connect_service_networks(name).await;
+            if let Some(service) = manifest.services.get(name) {
+                self.apply_port_mappings(name, service).await;
+            }
         }
         Ok(restarted)
     }
@@ -321,6 +364,7 @@ mod topological_waves_tests {
     fn process_service(depends_on: &[&str]) -> Service {
         Service::Process(ProcessService {
             command: vec!["true".to_string()],
+            ports: vec![],
             environment: HashMap::new(),
             working_dir: None,
             depends_on: depends_on.iter().map(|s| s.to_string()).collect(),

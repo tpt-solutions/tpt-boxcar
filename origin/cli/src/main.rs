@@ -374,7 +374,7 @@ async fn cmd_replay(manifest_path: &PathBuf, service: &str, scope_url: &str) -> 
         "Replaying '{service}' with captured args={:?}, calling `{}`",
         invocation.args, invocation.function
     );
-    tpt_origin_core::runtime::instantiate_and_run(&wasm_bytes, &invocation.args, &invocation.env)?;
+    tpt_origin_core::runtime::instantiate_and_run(&wasm_bytes, &invocation.args, &invocation.env, None)?;
     println!("Replay completed successfully.");
     Ok(())
 }

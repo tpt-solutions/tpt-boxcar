@@ -25,6 +25,9 @@ tpt-scope-agent = { path = "../../scope/agent" }
 containerd-client = "0.6"
 tonic = "0.12"
 
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
+
 [features]
 default = ["containerd"]
 containerd = []

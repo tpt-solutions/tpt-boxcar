@@ -33,7 +33,7 @@ fn bench_wasm_cold_start(c: &mut Criterion) {
 
     c.bench_function("wasm_cold_start", |b| {
         b.iter(|| {
-            instantiate_and_run(&wasm_bytes, &args, &env).expect("instantiate_and_run");
+            instantiate_and_run(&wasm_bytes, &args, &env, None).expect("instantiate_and_run");
         })
     });
 }

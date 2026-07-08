@@ -35,6 +35,7 @@ fn sample_manifest(wasm_path: std::path::PathBuf) -> Manifest {
         Service::Wasm(WasmService {
             path: wasm_path,
             args: vec!["--workers".to_string(), "4".to_string()],
+            ports: vec![],
             environment: HashMap::new(),
             memory_limit: Some("128m".to_string()),
             depends_on: vec!["api".to_string()],
@@ -169,6 +170,7 @@ async fn test_lifecycle_manager_creation() {
             } else {
                 vec!["sleep".to_string(), "20".to_string()]
             },
+            ports: vec![],
             environment: HashMap::new(),
             working_dir: None,
             depends_on: vec![],
@@ -180,6 +182,7 @@ async fn test_lifecycle_manager_creation() {
         Service::Wasm(WasmService {
             path: wasm_path,
             args: vec![],
+            ports: vec![],
             environment: HashMap::new(),
             memory_limit: None,
             depends_on: vec!["api".to_string()],

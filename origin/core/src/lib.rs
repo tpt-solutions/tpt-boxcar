@@ -3,6 +3,8 @@ pub mod runtime;
 pub mod network;
 pub mod dns;
 pub mod lifecycle;
+pub mod portmap;
+pub mod reslimit;
 #[cfg(all(target_os = "linux", feature = "containerd"))]
 pub mod containerd;
 

@@ -1,0 +1,19 @@
+[workspace]
+resolver = "2"
+# Deliberately NOT a member of the root repo workspace (see root Cargo.toml):
+# `probe/` needs a nightly toolchain + `build-std` for the `bpfel-unknown-none`
+# target, which would poison toolchain resolution for every other crate if
+# folded into the main workspace. `common`/`loader` build on stable and are
+# only pulled in by `scope/agent` via an optional, off-by-default path
+# dependency gated behind the `ebpf` feature (Linux only).
+members = ["common", "loader"]
+# `probe` is intentionally excluded even from this inner workspace: it has
+# its own rust-toolchain.toml (nightly) and is built as a separate `cargo`
+# invocation by `aya-build` from `loader/build.rs`, not compiled directly by
+# a `cargo build` run from here.
+exclude = ["probe"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+license = "Apache-2.0"

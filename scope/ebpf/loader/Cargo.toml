@@ -1,0 +1,15 @@
+[package]
+name = "scope-ebpf-loader"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+aya = "0.13"
+scope-ebpf-common = { path = "../common" }
+thiserror = "1"
+tracing = "0.1"
+
+[build-dependencies]
+aya-build = "0.1"
+cargo_metadata = "0.18"

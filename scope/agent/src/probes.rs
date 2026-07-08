@@ -386,6 +386,246 @@ impl Probe for WasmProbe {
     }
 }
 
+/// Wraps a real `tcp_connect()` kprobe (`scope-ebpf-loader`), translating
+/// its `ConnectEvent`s into the same `ProbeEvent`/`NetworkEvent` shape the
+/// rest of this crate (and `otel.rs`) already knows how to emit. Only
+/// available with `--features ebpf` on Linux — see `scope/ebpf/` and the
+/// `[features] ebpf` entry in this crate's `Cargo.toml` for why that's
+/// off by default (needs a nightly toolchain to compile the kernel-side
+/// object, and only runs on Linux at all).
+#[cfg(all(target_os = "linux", feature = "ebpf"))]
+pub struct EbpfNetworkProbe {
+    name: String,
+    state: ProbeState,
+    inner: Option<scope_ebpf_loader::TcpConnectProbe>,
+}
+
+#[cfg(all(target_os = "linux", feature = "ebpf"))]
+impl EbpfNetworkProbe {
+    pub fn new(name: &str) -> Self {
+        Self {
+            name: name.to_string(),
+            state: ProbeState::Detached,
+            inner: None,
+        }
+    }
+
+    fn to_probe_event(event: scope_ebpf_loader::ConnectEvent) -> ProbeEvent {
+        let src_addr = std::net::IpAddr::from(std::net::Ipv4Addr::from(event.saddr.to_ne_bytes()));
+        let dst_addr = std::net::IpAddr::from(std::net::Ipv4Addr::from(event.daddr.to_ne_bytes()));
+        ProbeEvent {
+            timestamp: event.timestamp_ns,
+            category: ProbeCategory::Network,
+            data: EventData::Network(NetworkEvent {
+                event_type: NetworkEventType::TcpConnect,
+                src_addr,
+                dst_addr,
+                src_port: event.sport,
+                dst_port: event.dport,
+                bytes: 0,
+                proto: TransportProtocol::Tcp,
+            }),
+            pid: event.pid,
+            tid: event.tid,
+            comm: scope_ebpf_loader::comm_string(&event),
+        }
+    }
+
+    /// Removes and returns every event captured since the last drain,
+    /// already converted to `ProbeEvent`s ready for `OtelExporter::emit_event`.
+    pub fn drain_events(&self) -> Vec<ProbeEvent> {
+        match &self.inner {
+            Some(probe) => probe
+                .drain_events()
+                .into_iter()
+                .map(Self::to_probe_event)
+                .collect(),
+            None => Vec::new(),
+        }
+    }
+}
+
+#[cfg(all(target_os = "linux", feature = "ebpf"))]
+impl Probe for EbpfNetworkProbe {
+    fn name(&self) -> &str {
+        &self.name
+    }
+
+    fn category(&self) -> ProbeCategory {
+        ProbeCategory::Network
+    }
+
+    fn state(&self) -> ProbeState {
+        self.state.clone()
+    }
+
+    fn attach(&mut self) -> Result<(), ProbeError> {
+        tracing::info!(probe = %self.name, "attaching real tcp_connect kprobe");
+        let probe = scope_ebpf_loader::TcpConnectProbe::attach().map_err(|e| {
+            ProbeError::InvalidConfig(format!("failed to attach tcp_connect kprobe: {e}"))
+        })?;
+        self.inner = Some(probe);
+        self.state = ProbeState::Attached;
+        Ok(())
+    }
+
+    fn detach(&mut self) -> Result<(), ProbeError> {
+        self.inner = None;
+        self.state = ProbeState::Detached;
+        Ok(())
+    }
+
+    fn pause(&mut self) -> Result<(), ProbeError> {
+        // The kprobe keeps capturing while "paused" (there's no cheap
+        // kernel-side pause primitive here) — poll_event/drain_events just
+        // stop being called by the manager loop meanwhile, so events queue
+        // up in the ring buffer reader thread until resumed or detached.
+        self.state = ProbeState::Paused;
+        Ok(())
+    }
+
+    fn resume(&mut self) -> Result<(), ProbeError> {
+        self.state = ProbeState::Attached;
+        Ok(())
+    }
+
+    fn poll_event(&self) -> Option<ProbeEvent> {
+        self.inner
+            .as_ref()
+            .and_then(|probe| probe.poll_event())
+            .map(Self::to_probe_event)
+    }
+}
+
+/// Wraps the real syscall kprobes (`openat`, `read`, `write`) via
+/// `scope-ebpf-loader`'s `SyscallProbeLoader`, translating its
+/// `SyscallEvent`s into the `ProbeEvent`/`SyscallEvent` shape that
+/// `otel.rs` already handles. Only available with `--features ebpf` on
+/// Linux — same caveats as `EbpfNetworkProbe`.
+#[cfg(all(target_os = "linux", feature = "ebpf"))]
+pub struct EbpfSyscallProbe {
+    name: String,
+    state: ProbeState,
+    inner: Option<scope_ebpf_loader::SyscallProbeLoader>,
+    filter: Vec<SyscallEventType>,
+}
+
+#[cfg(all(target_os = "linux", feature = "ebpf"))]
+impl EbpfSyscallProbe {
+    pub fn new(name: &str, filter: Vec<SyscallEventType>) -> Self {
+        Self {
+            name: name.to_string(),
+            state: ProbeState::Detached,
+            inner: None,
+            filter,
+        }
+    }
+
+    fn to_probe_event(event: scope_ebpf_loader::SyscallEvent) -> Option<ProbeEvent> {
+        let event_type = match event.event_type {
+            0 => SyscallEventType::Open,
+            1 => SyscallEventType::Read,
+            2 => SyscallEventType::Write,
+            _ => return None,
+        };
+
+        Some(ProbeEvent {
+            timestamp: event.timestamp_ns,
+            category: ProbeCategory::Syscall,
+            data: EventData::Syscall(crate::probes::SyscallEvent {
+                event_type,
+                syscall_nr: event.syscall_nr,
+                path: None,
+                fd: Some(event.arg_fd as i32),
+                bytes_rw: Some(event.arg_bytes),
+                exit_code: 0,
+                latency: std::time::Duration::ZERO,
+            }),
+            pid: event.pid,
+            tid: event.tid,
+            comm: scope_ebpf_loader::syscall_comm_string(&event),
+        })
+    }
+
+    fn matches_filter(event: &ProbeEvent, filter: &[SyscallEventType]) -> bool {
+        if filter.is_empty() {
+            return true;
+        }
+        match &event.data {
+            EventData::Syscall(s) => filter.contains(&s.event_type),
+            _ => false,
+        }
+    }
+
+    /// Removes and returns every event captured since the last drain,
+    /// filtered by the configured syscall types and converted to
+    /// `ProbeEvent`s ready for `OtelExporter::emit_event`.
+    pub fn drain_events(&self) -> Vec<ProbeEvent> {
+        match &self.inner {
+            Some(probe) => probe
+                .drain_events()
+                .into_iter()
+                .filter_map(Self::to_probe_event)
+                .filter(|e| Self::matches_filter(e, &self.filter))
+                .collect(),
+            None => Vec::new(),
+        }
+    }
+}
+
+#[cfg(all(target_os = "linux", feature = "ebpf"))]
+impl Probe for EbpfSyscallProbe {
+    fn name(&self) -> &str {
+        &self.name
+    }
+
+    fn category(&self) -> ProbeCategory {
+        ProbeCategory::Syscall
+    }
+
+    fn state(&self) -> ProbeState {
+        self.state.clone()
+    }
+
+    fn attach(&mut self) -> Result<(), ProbeError> {
+        tracing::info!(
+            probe = %self.name,
+            filter = ?self.filter,
+            "attaching real syscall kprobes (openat, read, write)"
+        );
+        let probe = scope_ebpf_loader::SyscallProbeLoader::attach().map_err(|e| {
+            ProbeError::InvalidConfig(format!("failed to attach syscall kprobes: {e}"))
+        })?;
+        self.inner = Some(probe);
+        self.state = ProbeState::Attached;
+        Ok(())
+    }
+
+    fn detach(&mut self) -> Result<(), ProbeError> {
+        self.inner = None;
+        self.state = ProbeState::Detached;
+        Ok(())
+    }
+
+    fn pause(&mut self) -> Result<(), ProbeError> {
+        self.state = ProbeState::Paused;
+        Ok(())
+    }
+
+    fn resume(&mut self) -> Result<(), ProbeError> {
+        self.state = ProbeState::Attached;
+        Ok(())
+    }
+
+    fn poll_event(&self) -> Option<ProbeEvent> {
+        self.inner
+            .as_ref()
+            .and_then(|probe| probe.poll_event())
+            .and_then(Self::to_probe_event)
+            .filter(|e| Self::matches_filter(e, &self.filter))
+    }
+}
+
 #[cfg(test)]
 mod wasm_probe_tests {
     use super::*;

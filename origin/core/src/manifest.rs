@@ -44,6 +44,14 @@ impl Service {
             Service::Process(s) => s.restart_policy,
         }
     }
+
+    pub fn ports(&self) -> &[PortMapping] {
+        match self {
+            Service::OCI(s) => &s.ports,
+            Service::Wasm(s) => &s.ports,
+            Service::Process(s) => &s.ports,
+        }
+    }
 }
 
 /// Whether `LifecycleManager::reap_and_restart` should bring a service back
@@ -66,11 +74,15 @@ pub enum RestartPolicy {
 pub struct ProcessService {
     pub command: Vec<String>,
     #[serde(default)]
+    pub ports: Vec<PortMapping>,
+    #[serde(default)]
     pub environment: HashMap<String, String>,
     #[serde(default)]
     pub working_dir: Option<PathBuf>,
     #[serde(default)]
     pub depends_on: Vec<String>,
+    #[serde(default)]
+    pub resources: Option<ResourceLimits>,
     #[serde(default)]
     pub restart_policy: RestartPolicy,
 }
@@ -102,9 +114,13 @@ pub struct WasmService {
     #[serde(default)]
     pub args: Vec<String>,
     #[serde(default)]
+    pub ports: Vec<PortMapping>,
+    #[serde(default)]
     pub environment: HashMap<String, String>,
     #[serde(default)]
     pub memory_limit: Option<String>,
+    #[serde(default)]
+    pub resources: Option<ResourceLimits>,
     #[serde(default)]
     pub depends_on: Vec<String>,
     /// Hex-encoded ed25519 signature over the module's compiled wasm bytes,

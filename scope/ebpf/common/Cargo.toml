@@ -1,0 +1,12 @@
+[package]
+name = "scope-ebpf-common"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[lib]
+# `probe` (no_std) and `loader` (std) both include this by path, compiled
+# for two different targets in the same build — no unstable features, no
+# allocation, so it needs nothing special to work under `no_std` as-is.
+
+[dependencies]
