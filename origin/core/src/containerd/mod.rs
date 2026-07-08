@@ -40,6 +40,69 @@ const NAMESPACE: &str = "tpt-boxcar";
 const SIGTERM: u32 = 15;
 const SIGKILL: u32 = 9;
 
+/// A process-unique, monotonically increasing id for `ctr tasks exec
+/// --exec-id`, which containerd requires to be unique per task among
+/// concurrent execs. Not a real UUID — just needs to not collide within
+/// this process, which a counter guarantees more simply than pulling in a
+/// UUID crate for one call site.
+fn next_exec_id() -> u64 {
+    use std::sync::atomic::{AtomicU64, Ordering};
+    static NEXT: AtomicU64 = AtomicU64::new(0);
+    NEXT.fetch_add(1, Ordering::Relaxed)
+}
+
+/// Docker lets manifests write a bare image name (`"node:20-alpine"`,
+/// `"postgres:16"`) and implicitly resolves it against Docker Hub as
+/// `docker.io/library/<name>`. containerd's `ctr` has no such implicit
+/// default — it needs a fully host-qualified reference, and fails with a
+/// confusing `parse "dummy://node:20-alpine": invalid port` error on a bare
+/// name (caught by a real pull against a real manifest during testing).
+/// Applying the same normalization Docker users expect keeps existing
+/// manifests working unmodified.
+fn normalize_image_ref(image_ref: &str) -> String {
+    // No slash at all means a bare "name" or "name:tag" — there's no
+    // registry host to detect, and a colon here is a tag separator, not a
+    // registry port (e.g. "node:20-alpine" must not be mistaken for a host
+    // with a port just because it contains ':').
+    if !image_ref.contains('/') {
+        return format!("docker.io/library/{image_ref}");
+    }
+
+    let first_segment = image_ref.split('/').next().unwrap();
+    let has_registry_host =
+        first_segment == "localhost" || first_segment.contains('.') || first_segment.contains(':');
+
+    if has_registry_host {
+        image_ref.to_string()
+    } else {
+        format!("docker.io/{image_ref}")
+    }
+}
+
+#[cfg(test)]
+mod normalize_image_ref_tests {
+    use super::normalize_image_ref;
+
+    #[test]
+    fn bare_name_and_tag_gets_docker_hub_library_prefix() {
+        assert_eq!(normalize_image_ref("node:20-alpine"), "docker.io/library/node:20-alpine");
+        assert_eq!(normalize_image_ref("alpine"), "docker.io/library/alpine");
+    }
+
+    #[test]
+    fn org_slash_repo_gets_docker_hub_prefix_only() {
+        assert_eq!(normalize_image_ref("myorg/myimage:tag"), "docker.io/myorg/myimage:tag");
+    }
+
+    #[test]
+    fn already_qualified_refs_are_left_alone() {
+        assert_eq!(normalize_image_ref("docker.io/library/alpine:3.19"), "docker.io/library/alpine:3.19");
+        assert_eq!(normalize_image_ref("ghcr.io/foo/bar:tag"), "ghcr.io/foo/bar:tag");
+        assert_eq!(normalize_image_ref("localhost:5000/foo"), "localhost:5000/foo");
+        assert_eq!(normalize_image_ref("myregistry.internal:5000/foo:tag"), "myregistry.internal:5000/foo:tag");
+    }
+}
+
 /// What `RuntimeManager::start_oci` needs to create and run a container,
 /// mapped from `manifest::OCIService`.
 #[derive(Debug, Clone, Default)]
@@ -53,6 +116,28 @@ pub struct ContainerSpec {
     /// Fractional CPU count (`ctr run --cpus`), from
     /// `OCIService.resources.cpu` (e.g. `"1.5"`) parsed by the caller.
     pub cpu_limit: Option<f64>,
+    /// Bind mounts, from `OCIService.volumes`.
+    pub mounts: Vec<MountSpec>,
+}
+
+/// Directory containerd writes captured task stdout/stderr into (one file
+/// per container id), so `tpt origin logs <service>` has something real to
+/// read instead of the "OCI services aren't captured yet" placeholder.
+/// Overridable via `ORIGIN_LOGS_DIR` so tests/CI can point elsewhere.
+pub fn logs_dir() -> PathBuf {
+    PathBuf::from(std::env::var("ORIGIN_LOGS_DIR").unwrap_or_else(|_| "/var/lib/tpt-boxcar/logs".to_string()))
+}
+
+/// Path of the captured combined stdout/stderr log for container `id`.
+pub fn log_path(id: &str) -> PathBuf {
+    logs_dir().join(format!("{id}.log"))
+}
+
+#[derive(Debug, Clone)]
+pub struct MountSpec {
+    pub host_source: String,
+    pub container_target: String,
+    pub read_only: bool,
 }
 
 pub struct ContainerdClient {
@@ -110,6 +195,7 @@ impl ContainerdClient {
     /// fully-functional pull through containerd's own CLI (which talks to
     /// the identical gRPC API), not a fake.
     pub async fn pull_image(&self, image_ref: &str) -> Result<()> {
+        let image_ref = normalize_image_ref(image_ref);
         let output = tokio::process::Command::new("ctr")
             .args([
                 "--address",
@@ -118,7 +204,7 @@ impl ContainerdClient {
                 &self.namespace,
                 "images",
                 "pull",
-                image_ref,
+                &image_ref,
             ])
             .output()
             .await
@@ -158,8 +244,26 @@ impl ContainerdClient {
             args.push("--cpus".to_string());
             args.push(cpus.to_string());
         }
+        for mount in &spec.mounts {
+            let options = if mount.read_only { "rbind:ro" } else { "rbind:rw" };
+            args.push("--mount".to_string());
+            args.push(format!(
+                "type=bind,src={},dst={},options={options}",
+                mount.host_source, mount.container_target
+            ));
+        }
 
-        args.push(spec.image_ref.clone());
+        // `--log-uri file://...` tells containerd's runtime shim to write
+        // the task's stdout/stderr straight to this file instead of
+        // discarding it — without this, a detached `ctr run -d` task's
+        // output goes nowhere and `tpt origin logs` has nothing to read.
+        std::fs::create_dir_all(logs_dir())
+            .with_context(|| format!("failed to create logs directory {}", logs_dir().display()))?;
+        let log_file = log_path(id);
+        args.push("--log-uri".to_string());
+        args.push(format!("file://{}", log_file.display()));
+
+        args.push(normalize_image_ref(&spec.image_ref));
         args.push(id.to_string());
         if let Some(command) = &spec.command {
             args.extend(command.clone());
@@ -180,6 +284,38 @@ impl ContainerdClient {
         self.task_pid(id)
             .await?
             .with_context(|| format!("container '{id}' started but no task pid was found"))
+    }
+
+    /// Runs `command` inside container `id`'s running task via `ctr tasks
+    /// exec` (the real containerd exec path, same one `ctr exec` itself
+    /// uses) and reports whether it exited zero. Used to drive
+    /// `OCIService.healthcheck` — a real in-container health probe, not a
+    /// proxy for "is the task's top-level process still alive". A `timeout`
+    /// causes this to return `Ok(false)` (unhealthy) rather than hanging
+    /// forever on a wedged probe command.
+    pub async fn exec_healthcheck(&self, id: &str, command: &[String], timeout: std::time::Duration) -> Result<bool> {
+        anyhow::ensure!(!command.is_empty(), "healthcheck command must not be empty");
+
+        let exec_id = format!("healthcheck-{}", next_exec_id());
+        let mut args: Vec<String> = vec![
+            "--address".to_string(),
+            self.socket_path.to_string_lossy().to_string(),
+            "--namespace".to_string(),
+            self.namespace.clone(),
+            "tasks".to_string(),
+            "exec".to_string(),
+            "--exec-id".to_string(),
+            exec_id,
+            id.to_string(),
+        ];
+        args.extend(command.iter().cloned());
+
+        let run = tokio::process::Command::new("ctr").args(&args).output();
+        match tokio::time::timeout(timeout, run).await {
+            Ok(Ok(output)) => Ok(output.status.success()),
+            Ok(Err(e)) => Err(e).context("failed to spawn `ctr tasks exec` for healthcheck"),
+            Err(_) => Ok(false), // timed out running the probe: treat as unhealthy
+        }
     }
 
     /// Real gRPC lookup of a running task's OS pid via the `Tasks` service,
@@ -299,6 +435,7 @@ mod tests {
             env: HashMap::new(),
             memory_limit_bytes: Some(64 * 1024 * 1024),
             cpu_limit: None,
+            mounts: Vec::new(),
         };
 
         let pid = client
@@ -319,5 +456,68 @@ mod tests {
         // After teardown, the task should no longer be listed.
         let after_stop = client.task_pid(&container_id).await.unwrap();
         assert_eq!(after_stop, None, "task should be gone after stop_container");
+    }
+
+    /// Verifies `OCIService.resources.memory` results in real kernel-level
+    /// enforcement — the container's cgroup actually OOM-kills the task —
+    /// not merely that `ctr run --memory-limit` accepted the flag without
+    /// error. Writes to tmpfs (`/dev/shm`), which the kernel charges
+    /// against the container's memory cgroup exactly like anonymous memory,
+    /// as a dependency-free way to grow real cgroup memory usage past a
+    /// small limit without needing a language runtime inside the image.
+    /// Requires the same live containerd daemon as the test above. Run
+    /// manually with:
+    /// `cargo test -p tpt-origin-core --features containerd -- --ignored cgroup_memory_limit_actually_oom_kills_the_task`
+    #[tokio::test]
+    #[ignore]
+    async fn cgroup_memory_limit_actually_oom_kills_the_task() {
+        let client = ContainerdClient::connect()
+            .await
+            .expect("failed to connect to containerd — is it running at /run/containerd/containerd.sock?");
+
+        let image = "docker.io/library/alpine:3.19";
+        client.pull_image(image).await.expect("should really pull alpine:3.19 from docker.io");
+
+        let container_id = format!("tpt-boxcar-oom-test-{}", std::process::id());
+        let spec = ContainerSpec {
+            image_ref: image.to_string(),
+            command: Some(vec![
+                "sh".to_string(),
+                "-c".to_string(),
+                // Attempts to write far more than the memory limit below;
+                // if the limit is real, the kernel OOM-kills this before it
+                // can complete.
+                "dd if=/dev/zero of=/dev/shm/fill bs=1M count=256".to_string(),
+            ]),
+            env: HashMap::new(),
+            memory_limit_bytes: Some(16 * 1024 * 1024), // 16MiB, far below the 256MiB write attempted above
+            cpu_limit: None,
+            mounts: Vec::new(),
+        };
+
+        client
+            .run_container(&container_id, &spec)
+            .await
+            .expect("should really create and start the container's task");
+
+        let mut tasks = TasksClient::new(client.channel.clone());
+        let wait_req = WaitRequest { container_id: container_id.clone(), exec_id: String::new() };
+        let wait_req = with_namespace!(wait_req, client.namespace);
+        let wait_resp = tokio::time::timeout(std::time::Duration::from_secs(30), tasks.wait(wait_req))
+            .await
+            .expect("task should exit well within 30s once the kernel OOM-kills it")
+            .expect("Tasks.Wait RPC should succeed")
+            .into_inner();
+
+        // A cgroup OOM-kill delivers SIGKILL to the task; containerd
+        // reports that as exit_status 137 (128 + SIGKILL). Anything else
+        // means the kernel did *not* actually enforce the limit.
+        assert_eq!(
+            wait_resp.exit_status, 137,
+            "expected the kernel to OOM-kill the task (exit_status 137), got {}",
+            wait_resp.exit_status
+        );
+
+        client.stop_container(&container_id).await.ok();
     }
 }

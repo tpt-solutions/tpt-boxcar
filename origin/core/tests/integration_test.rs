@@ -2,7 +2,7 @@ use std::collections::HashMap;
 use tpt_origin_core::dns::DnsResolver;
 use tpt_origin_core::lifecycle::LifecycleManager;
 use tpt_origin_core::manifest::{
-    Manifest, OCIService, PortMapping, Service, VolumeMount, WasmService,
+    Manifest, OCIService, PortMapping, ProcessService, Service, VolumeMount, WasmService,
 };
 use tpt_origin_core::network::{NetworkConfig, NetworkManager};
 
@@ -27,6 +27,7 @@ fn sample_manifest(wasm_path: std::path::PathBuf) -> Manifest {
             depends_on: vec![],
             healthcheck: None,
             resources: None,
+            restart_policy: Default::default(),
         }),
     );
     services.insert(
@@ -39,6 +40,7 @@ fn sample_manifest(wasm_path: std::path::PathBuf) -> Manifest {
             depends_on: vec!["api".to_string()],
             expected_signature: None,
             trusted_public_key: None,
+            restart_policy: Default::default(),
         }),
     );
 
@@ -141,12 +143,58 @@ volumes:
 
 #[tokio::test]
 async fn test_lifecycle_manager_creation() {
+    // Bind DNS to an ephemeral port: the standard mDNS port 5353 can
+    // legitimately already be held by something else on the host (a system
+    // resolver, a port-exclusion range, etc), and this test doesn't depend
+    // on which port `up()` actually binds.
+    std::env::set_var("ORIGIN_DNS_LISTEN_ADDR", "127.0.0.1:0");
+
     let wasm_dir = std::env::temp_dir().join("tpt-integration-lifecycle");
     std::fs::create_dir_all(&wasm_dir).unwrap();
     let wasm_path = wasm_dir.join("transform.wasm");
     std::fs::write(&wasm_path, b"\0asm\x01\x00\x00\x00").unwrap();
 
-    let manifest = sample_manifest(wasm_path);
+    // A dedicated manifest rather than `sample_manifest()`: that fixture's
+    // "api" is deliberately `Service::OCI` so `test_manifest_parse_oci_and_wasm_services`
+    // can validate OCI field parsing, but OCI services now require a real
+    // Linux + containerd host (see runtime.rs). This test's job is
+    // exercising `LifecycleManager::up`/`down` bookkeeping, not containerd,
+    // so it uses a portable `Service::Process` instead.
+    let mut services = HashMap::new();
+    services.insert(
+        "api".to_string(),
+        Service::Process(ProcessService {
+            command: if cfg!(windows) {
+                vec!["ping".to_string(), "-n".to_string(), "20".to_string(), "127.0.0.1".to_string()]
+            } else {
+                vec!["sleep".to_string(), "20".to_string()]
+            },
+            environment: HashMap::new(),
+            working_dir: None,
+            depends_on: vec![],
+            restart_policy: Default::default(),
+        }),
+    );
+    services.insert(
+        "transform".to_string(),
+        Service::Wasm(WasmService {
+            path: wasm_path,
+            args: vec![],
+            environment: HashMap::new(),
+            memory_limit: None,
+            depends_on: vec!["api".to_string()],
+            expected_signature: None,
+            trusted_public_key: None,
+            restart_policy: Default::default(),
+        }),
+    );
+    let manifest = Manifest {
+        name: "lifecycle-test".to_string(),
+        version: String::new(),
+        services,
+        networks: HashMap::new(),
+        volumes: HashMap::new(),
+    };
     let mut lm = LifecycleManager::new(&manifest);
     assert_eq!(
         lm.get_service_status("api").map(|s| &s.name),
@@ -202,6 +250,11 @@ fn test_dns_fqdn_handling() {
     assert!(dns.resolve("worker.local").is_some());
 }
 
+/// Exercises the bookkeeping side of `NetworkManager` that must work
+/// regardless of privilege level: real device creation (bridge on Linux,
+/// `if_bridge` on macOS, Hyper-V internal switch on Windows) additionally
+/// requires root/CAP_NET_ADMIN or an elevated process, so it isn't asserted
+/// here — see `network_manager_creates_a_real_linux_bridge` for that.
 #[tokio::test]
 async fn test_network_manager_create_delete() {
     let mut net = NetworkManager::new();
@@ -214,12 +267,48 @@ async fn test_network_manager_create_delete() {
     })
     .await
     .unwrap();
-    assert!(net.get_bridge_interface().is_some());
+    assert_eq!(net.network_gateway("app-net"), Some("10.1.0.1"));
+    assert_eq!(net.network_driver("app-net"), Some("bridge"));
 
-    net.connect_service("api", "app-net").await.unwrap();
+    let ip = net.connect_service("api", "app-net").await.unwrap();
+    assert_eq!(net.assigned_ip("app-net", "api"), Some(ip.as_str()));
     net.disconnect_service("api", "app-net").await.unwrap();
+    assert_eq!(net.assigned_ip("app-net", "api"), None);
 
     net.delete_network("app-net").await.unwrap();
+}
+
+/// Real end-to-end proof that `create_network` creates an actual Linux
+/// bridge device (not just a fabricated name string): requires
+/// root/CAP_NET_ADMIN and `iproute2`. Run manually with:
+/// `sudo cargo test -p tpt-origin-core --test integration_test -- --ignored network_manager_creates_a_real_linux_bridge`
+#[cfg(target_os = "linux")]
+#[tokio::test]
+#[ignore]
+async fn network_manager_creates_a_real_linux_bridge() {
+    let mut net = NetworkManager::new();
+    net.create_network(NetworkConfig {
+        name: "real-bridge-test".to_string(),
+        driver: "bridge".to_string(),
+        subnet: None,
+        gateway: None,
+    })
+    .await
+    .unwrap();
+
+    let bridge = net.get_bridge_interface().expect("real bridge device should have been created");
+    let output = std::process::Command::new("ip")
+        .args(["link", "show", bridge])
+        .output()
+        .expect("failed to run `ip link show`");
+    assert!(output.status.success(), "bridge device {bridge} should really exist in the kernel");
+
+    net.delete_network("real-bridge-test").await.unwrap();
+    let after = std::process::Command::new("ip")
+        .args(["link", "show", bridge])
+        .output()
+        .expect("failed to run `ip link show`");
+    assert!(!after.status.success(), "bridge device {bridge} should be gone after delete_network");
 }
 
 #[tokio::test]

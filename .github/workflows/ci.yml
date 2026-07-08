@@ -1,0 +1,65 @@
+name: CI
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+    branches: [master]
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  rust:
+    name: Rust (build, test, clippy, fmt)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy, rustfmt
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo fmt --all -- --check
+      - run: cargo build --workspace
+      - run: cargo test --workspace
+      - run: cargo clippy --workspace -- -D warnings
+
+  go:
+    name: Go (build, test)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.23"
+      - run: go build ./tether/control-plane/... ./scope/backend/... ./frontier/control-plane/...
+      - run: go test ./tether/control-plane/... ./scope/backend/... ./frontier/control-plane/...
+
+  # Real end-to-end proof of Origin's containerd integration, against a
+  # live containerd daemon rather than mocks (see origin/core/src/containerd/mod.rs
+  # module docs). Separate job from `rust` above because it needs containerd
+  # installed and running, and because #[ignore]-gated tests are excluded
+  # from the default `cargo test --workspace` run in the `rust` job.
+  origin-containerd:
+    name: Origin containerd integration test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Install containerd and protobuf-compiler
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y containerd protobuf-compiler
+
+      - name: Start containerd
+        run: |
+          sudo systemctl enable --now containerd
+          sudo systemctl status containerd --no-pager
+
+      - name: Run containerd integration tests (real pull/run/teardown + real cgroup OOM enforcement)
+        run: |
+          sudo -E env "PATH=$PATH" cargo test -p tpt-origin-core --features containerd -- --ignored --test-threads=1 containerd_pulls_and_runs_a_real_container cgroup_memory_limit_actually_oom_kills_the_task
+        env:
+          ORIGIN_CONTAINERD_SOCKET: /run/containerd/containerd.sock

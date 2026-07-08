@@ -1,0 +1,57 @@
+# TPT Boxcar cross-product manifest.
+#
+# Brings up Tether, Origin, and Frontier together from one manifest, in
+# dependency order (Tether -> Origin -> Frontier):
+#
+#   tpt up                 # reads ./boxcar.yaml by default
+#   tpt down
+#
+# This is a plain Origin manifest (same schema as `manifest.yaml` /
+# `tpt origin up`) — `tpt up`/`tpt down` are thin wrappers around the same
+# `LifecycleManager` that drives `tpt origin up`. Tether and Frontier don't
+# have a native `oci`/`wasm` runtime target here, so their control planes
+# run as `type: process` services; ordering across all three products is
+# expressed with `depends_on`, resolved via `topological_waves` (Kahn's
+# algorithm) exactly like any other Origin manifest.
+#
+# Swap the `go run` commands below for prebuilt binaries
+# (`go build ./tether/control-plane`, `go build ./frontier/control-plane`)
+# for faster restarts once you've built them once.
+
+name: tpt-boxcar
+
+services:
+  # Tether: state & connection proxy control plane. No dependencies — it's
+  # the first thing up.
+  tether-control-plane:
+    type: process
+    command: ["go", "run", "./tether/control-plane"]
+    environment:
+      TETHER_RATE_LIMIT: "300"
+    restart_policy: on_failure
+
+  # Origin: the local sandbox itself. Add your app's real `oci`/`wasm`
+  # services here — this placeholder just demonstrates the dependency edge
+  # from Tether. Swap `command` for your own workload, or add sibling
+  # `type: oci` / `type: wasm` services that `depends_on: [tether-control-plane]`.
+  origin-workload:
+    type: process
+    command: ["echo", "origin workload placeholder — replace with your app's services"]
+    depends_on:
+      - tether-control-plane
+
+  # Frontier: edge service mesh / API gateway control plane. Writes the
+  # config file the Frontier Wasm data plane hot-reloads from. Comes up
+  # last, once Origin's workload is running.
+  frontier-control-plane:
+    type: process
+    command: ["go", "run", "./frontier/control-plane"]
+    environment:
+      FRONTIER_RATE_LIMIT: "300"
+    depends_on:
+      - origin-workload
+    restart_policy: on_failure
+
+networks:
+  default:
+    driver: bridge

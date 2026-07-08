@@ -122,7 +122,7 @@ async fn cmd_distill(
 ) -> anyhow::Result<()> {
     let analysis = Analyzer::new(image).analyze().await?;
     let distiller = Distiller::new();
-    let distilled = distiller.distill(&analysis)?;
+    let distilled = distiller.distill(&analysis, image).await?;
 
     if json {
         println!("{}", serde_json::to_string_pretty(&distilled)?);
@@ -154,7 +154,7 @@ async fn cmd_distill(
 
     if let Some(format) = sbom {
         if format.eq_ignore_ascii_case("spdx") {
-            let spdx = distiller.generate_spdx_sbom(&analysis.phase1.dependencies)?;
+            let spdx = distiller.generate_spdx_sbom(image, &analysis.phase1.dependencies).await?;
             println!("\n--- SBOM (SPDX) ---");
             println!("{}", serde_json::to_string_pretty(&spdx)?);
         } else {
@@ -205,7 +205,7 @@ async fn cmd_audit(image: &PathBuf, config_path: &PathBuf, ai_override: Option<&
     let orchestrator = config::build_orchestrator(&config, ai_override)?;
 
     let analysis = Analyzer::new(image).analyze().await?;
-    let distilled = Distiller::new().distill(&analysis)?;
+    let distilled = Distiller::new().distill(&analysis, image).await?;
     let audit = orchestrator.generate_security_audit(&distilled).await?;
 
     println!("Overall risk: {}", audit.overall_risk);

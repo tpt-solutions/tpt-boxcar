@@ -36,6 +36,26 @@ impl Service {
             Service::Process(s) => &s.depends_on,
         }
     }
+
+    pub fn restart_policy(&self) -> RestartPolicy {
+        match self {
+            Service::OCI(s) => s.restart_policy,
+            Service::Wasm(s) => s.restart_policy,
+            Service::Process(s) => s.restart_policy,
+        }
+    }
+}
+
+/// Whether `LifecycleManager::reap_and_restart` should bring a service back
+/// up after it exits on its own (crash, or — for `OnFailure` — any nonzero
+/// exit). Mirrors Docker's `--restart` policies.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum RestartPolicy {
+    #[default]
+    Never,
+    OnFailure,
+    Always,
 }
 
 /// A native process service: runs a pre-built binary directly (no
@@ -51,6 +71,8 @@ pub struct ProcessService {
     pub working_dir: Option<PathBuf>,
     #[serde(default)]
     pub depends_on: Vec<String>,
+    #[serde(default)]
+    pub restart_policy: RestartPolicy,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -70,6 +92,8 @@ pub struct OCIService {
     pub healthcheck: Option<HealthCheck>,
     #[serde(default)]
     pub resources: Option<ResourceLimits>,
+    #[serde(default)]
+    pub restart_policy: RestartPolicy,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -92,6 +116,8 @@ pub struct WasmService {
     pub expected_signature: Option<String>,
     #[serde(default)]
     pub trusted_public_key: Option<String>,
+    #[serde(default)]
+    pub restart_policy: RestartPolicy,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

@@ -113,6 +113,10 @@ pub struct LifecycleManager {
     dns: DnsResolver,
     health: HashMap<String, ServiceHealth>,
     manifest_name: String,
+    /// Networks declared by the manifest passed to `up`, kept so `down`,
+    /// `restart_service`, and `reap_and_restart` can (re)attach/detach
+    /// services without needing the manifest passed back in every time.
+    network_names: Vec<String>,
 }
 
 impl LifecycleManager {
@@ -123,6 +127,7 @@ impl LifecycleManager {
             dns: DnsResolver::new(),
             health: HashMap::new(),
             manifest_name: manifest.name.clone(),
+            network_names: Vec::new(),
         }
     }
 
@@ -139,6 +144,7 @@ impl LifecycleManager {
                 })
                 .await?;
         }
+        self.network_names = manifest.networks.keys().cloned().collect();
 
         for (name, _service) in &manifest.services {
             self.dns
@@ -169,6 +175,7 @@ impl LifecycleManager {
                     health.status = ServiceStatus::Running;
                     health.started_at = Some(Instant::now());
                 }
+                self.connect_service_networks(name).await;
             }
         }
 
@@ -176,16 +183,63 @@ impl LifecycleManager {
         Ok(())
     }
 
+    /// Attaches a just-started service to every network declared by the
+    /// manifest and refreshes its DNS entry with the real allocated
+    /// address. On Linux, an OCI service (which has a real containerd pid)
+    /// gets a real veth into its network namespace; everything else
+    /// (`process`/`wasm` services, or a non-Linux/unprivileged host) still
+    /// gets a real, uniquely allocated address for bookkeeping/DNS, just
+    /// without an actual attached device. Failures are logged, not
+    /// propagated — a service that fails to attach to a network still keeps
+    /// running with its placeholder DNS entry from `up`.
+    async fn connect_service_networks(&mut self, name: &str) {
+        if self.network_names.is_empty() {
+            return;
+        }
+        let pid = self.runtime.list_pids().get(name).copied();
+        for net_name in self.network_names.clone() {
+            let result = match pid {
+                Some(pid) => self.network.connect_service_with_pid(name, &net_name, pid).await,
+                None => self.network.connect_service(name, &net_name).await,
+            };
+            match result {
+                Ok(ip) => self.dns.add_entry(name, &ip, None),
+                Err(e) => tracing::warn!(
+                    "failed to connect service '{name}' to network '{net_name}': {e:#}"
+                ),
+            }
+        }
+    }
+
+    /// Detaches a service from every declared network (real veth teardown
+    /// where one exists) — the inverse of `connect_service_networks`.
+    async fn disconnect_service_networks(&mut self, name: &str) {
+        for net_name in self.network_names.clone() {
+            if let Err(e) = self.network.disconnect_service(name, &net_name).await {
+                tracing::warn!("failed to disconnect service '{name}' from network '{net_name}': {e:#}");
+            }
+        }
+    }
+
     pub async fn down(&mut self) -> Result<()> {
         tracing::info!("Tearing down environment: {}", self.manifest_name);
+        for name in self.health.keys().cloned().collect::<Vec<_>>() {
+            self.disconnect_service_networks(&name).await;
+        }
         self.runtime.stop_all().await?;
         self.dns.stop().await?;
+        for net_name in self.network_names.clone() {
+            if let Err(e) = self.network.delete_network(&net_name).await {
+                tracing::warn!("failed to delete network '{net_name}': {e:#}");
+            }
+        }
         tracing::info!("Environment torn down: {}", self.manifest_name);
         Ok(())
     }
 
     pub async fn restart_service(&mut self, name: &str, manifest: &Manifest) -> Result<()> {
         tracing::info!("Restarting service: {name}");
+        self.disconnect_service_networks(name).await;
         self.runtime.stop_service(name).await?;
         if let Some(service) = manifest.services.get(name) {
             self.runtime.start_service(name, service).await?;
@@ -194,8 +248,49 @@ impl LifecycleManager {
                 health.status = ServiceStatus::Running;
                 health.started_at = Some(Instant::now());
             }
+            self.connect_service_networks(name).await;
         }
         Ok(())
+    }
+
+    /// Polls every running service for an unplanned exit and restarts any
+    /// whose manifest `restart_policy` allows it — real crash recovery.
+    /// Intended to be called periodically (e.g. from a supervising loop in
+    /// the CLI); a single call only reaps whatever has already exited by
+    /// the time it runs, it does not itself wait or loop.
+    pub async fn reap_and_restart(&mut self, manifest: &Manifest) -> Result<Vec<String>> {
+        let restarted = self.runtime.reap_and_restart(manifest).await?;
+        for name in &restarted {
+            if let Some(health) = self.health.get_mut(name) {
+                health.restart_count += 1;
+                health.status = ServiceStatus::Running;
+                health.started_at = Some(Instant::now());
+            }
+            // The crashed process's netns (and with it, any veth peer) is
+            // already gone by the time the kernel reaps it; this just drops
+            // our now-stale bookkeeping entry so the reconnect below
+            // doesn't short-circuit on a cached IP/veth from before the
+            // crash.
+            self.disconnect_service_networks(name).await;
+            self.connect_service_networks(name).await;
+        }
+        Ok(restarted)
+    }
+
+    /// Polls `OCIService.healthcheck` for every running OCI service and
+    /// mirrors any resulting status transition into `ServiceHealth`.
+    /// Intended to be called periodically, alongside `reap_and_restart`,
+    /// from a supervising loop.
+    pub async fn poll_healthchecks(&mut self, manifest: &Manifest) -> Result<Vec<String>> {
+        let newly_failed = self.runtime.poll_healthchecks(manifest).await?;
+        for name in self.health.keys().cloned().collect::<Vec<_>>() {
+            if let Some(status) = self.runtime.get_status(&name) {
+                if let Some(health) = self.health.get_mut(&name) {
+                    health.status = status.clone();
+                }
+            }
+        }
+        Ok(newly_failed)
     }
 
     pub fn get_service_status(&self, name: &str) -> Option<&ServiceHealth> {
@@ -229,6 +324,7 @@ mod topological_waves_tests {
             environment: HashMap::new(),
             working_dir: None,
             depends_on: depends_on.iter().map(|s| s.to_string()).collect(),
+            restart_policy: Default::default(),
         })
     }
 

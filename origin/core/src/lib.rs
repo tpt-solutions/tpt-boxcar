@@ -43,6 +43,20 @@ impl Origin {
         self.lifecycle.restart_service(name, manifest).await
     }
 
+    /// Reaps any service that exited on its own and, per its manifest
+    /// `restart_policy`, restarts it. Call this periodically (e.g. from a
+    /// supervising loop) — a single call only catches whatever has already
+    /// exited by the time it runs.
+    pub async fn reap_and_restart(&mut self, manifest: &Manifest) -> anyhow::Result<Vec<String>> {
+        self.lifecycle.reap_and_restart(manifest).await
+    }
+
+    /// Runs due `OCIService.healthcheck` probes and updates service status
+    /// accordingly. Call this periodically alongside `reap_and_restart`.
+    pub async fn poll_healthchecks(&mut self, manifest: &Manifest) -> anyhow::Result<Vec<String>> {
+        self.lifecycle.poll_healthchecks(manifest).await
+    }
+
     pub fn status(&self, name: &str) -> Option<ServiceHealthDto> {
         self.lifecycle.get_service_status(name).map(ServiceHealthDto::from)
     }

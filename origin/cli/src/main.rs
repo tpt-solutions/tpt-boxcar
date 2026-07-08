@@ -21,6 +21,19 @@ enum Commands {
         #[command(subcommand)]
         command: OriginCommands,
     },
+    /// Bring up a cross-product environment (Tether + Origin + Frontier, or
+    /// any subset) from a single `boxcar.yaml` manifest. Services are
+    /// started in `depends_on` order via the same `LifecycleManager` that
+    /// backs `tpt origin up` — Tether/Frontier's control planes run as
+    /// `type: process` entries alongside native `oci`/`wasm` Origin
+    /// services in the same manifest.
+    Up {
+        /// Path to the cross-product manifest file
+        #[arg(short, long, default_value = "boxcar.yaml")]
+        manifest: PathBuf,
+    },
+    /// Tear down a running `tpt up` environment
+    Down,
 }
 
 #[derive(Subcommand)]
@@ -97,6 +110,8 @@ async fn main() -> anyhow::Result<()> {
                 scope_url,
             } => cmd_replay(&manifest, &service, &scope_url).await,
         },
+        Commands::Up { manifest } => cmd_up(&manifest).await,
+        Commands::Down => cmd_down().await,
     }
 }
 
@@ -169,9 +184,27 @@ async fn cmd_up(manifest_path: &PathBuf) -> anyhow::Result<()> {
     println!("\nAll services are running. Press Ctrl+C to stop.");
     // The embeddable `Origin` facade deliberately doesn't expose
     // `wait_for_signal` (a CLI-only concern), so the CLI waits on ctrl_c
-    // itself.
-    tokio::signal::ctrl_c().await?;
-    tracing::info!("Received shutdown signal");
+    // itself. In between, it's also the one place that actually drives the
+    // poll-based `reap_and_restart`/`poll_healthchecks` loop — until now
+    // both were only callable, never invoked automatically by anything.
+    let mut supervise_tick = tokio::time::interval(std::time::Duration::from_secs(5));
+    supervise_tick.tick().await; // first tick fires immediately; skip it
+    loop {
+        tokio::select! {
+            _ = tokio::signal::ctrl_c() => {
+                tracing::info!("Received shutdown signal");
+                break;
+            }
+            _ = supervise_tick.tick() => {
+                if let Err(e) = origin.reap_and_restart(&manifest).await {
+                    tracing::warn!("reap_and_restart failed: {e}");
+                }
+                if let Err(e) = origin.poll_healthchecks(&manifest).await {
+                    tracing::warn!("poll_healthchecks failed: {e}");
+                }
+            }
+        }
+    }
     origin.down().await?;
     state::clear(state_dir)?;
     Ok(())
@@ -228,8 +261,61 @@ async fn cmd_ps() -> anyhow::Result<()> {
     Ok(())
 }
 
+/// Path containerd writes a running OCI service's captured combined
+/// stdout/stderr to (wired up in `RuntimeManager::start_oci` via `ctr run
+/// --log-uri file://...`). Mirrors `tpt_origin_core::containerd::log_path`,
+/// duplicated here (rather than depending on that module directly) since
+/// the `containerd` module only exists on the `target_os = "linux"` +
+/// `containerd` feature combination, while the CLI itself builds
+/// everywhere.
+fn oci_log_path(service: &str) -> std::path::PathBuf {
+    let dir = std::env::var("ORIGIN_LOGS_DIR").unwrap_or_else(|_| "/var/lib/tpt-boxcar/logs".to_string());
+    std::path::PathBuf::from(dir).join(format!("{service}.log"))
+}
+
 async fn cmd_logs(service: &str, follow: bool) -> anyhow::Result<()> {
-    println!("Streaming logs for service: {service} (follow={follow})");
+    let env = state::read(std::path::Path::new("."))?
+        .ok_or_else(|| anyhow::anyhow!("no running environment found (run `tpt origin up` first)"))?;
+    let svc = env
+        .services
+        .iter()
+        .find(|s| s.name == service)
+        .ok_or_else(|| anyhow::anyhow!("service '{service}' not found in the running environment"))?;
+
+    if svc.service_type != "oci" {
+        anyhow::bail!(
+            "real log capture is only wired up for `type: oci` services so far; \
+             '{service}' is `type: {}` — its output is inherited directly into this terminal's `tpt origin up`",
+            svc.service_type
+        );
+    }
+
+    let path = oci_log_path(service);
+    if !path.exists() {
+        anyhow::bail!("no captured log file found at {} yet", path.display());
+    }
+
+    use std::io::{Read, Seek, SeekFrom};
+    let mut file = std::fs::File::open(&path)?;
+    let mut buf = String::new();
+    file.read_to_string(&mut buf)?;
+    print!("{buf}");
+
+    if follow {
+        let mut pos = file.seek(SeekFrom::End(0))?;
+        loop {
+            tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+            let metadata = std::fs::metadata(&path)?;
+            if metadata.len() > pos {
+                file.seek(SeekFrom::Start(pos))?;
+                let mut chunk = String::new();
+                file.read_to_string(&mut chunk)?;
+                print!("{chunk}");
+                pos = metadata.len();
+            }
+        }
+    }
+
     Ok(())
 }
 

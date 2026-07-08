@@ -5,7 +5,7 @@ use tpt_scope_agent::probes::{WasmInvocationEvent, WasmProbe};
 use wasmtime_wasi::preview1::WasiP1Ctx;
 use wasmtime_wasi::WasiCtxBuilder;
 
-use crate::manifest::{OCIService, ProcessService, Service, WasmService};
+use crate::manifest::{Manifest, OCIService, ProcessService, RestartPolicy, Service, WasmService};
 
 #[cfg(all(target_os = "linux", feature = "containerd"))]
 use crate::containerd::{ContainerSpec, ContainerdClient};
@@ -37,6 +37,24 @@ fn parse_memory_limit(value: &str) -> Option<u64> {
     number_part.trim().parse::<u64>().ok().map(|n| n * multiplier)
 }
 
+/// Resolves an `OCIService.volumes[].source` to a real host path for a bind
+/// mount. A path-shaped value (starts with `/`, `.`, or `~`) is used as-is;
+/// anything else is treated as a Docker-style named volume and resolved
+/// (creating the directory if needed) under a managed directory — mirroring
+/// how Docker itself keeps named volumes under a fixed location rather than
+/// requiring the manifest author to know a real path.
+#[cfg(all(target_os = "linux", feature = "containerd"))]
+fn resolve_volume_source(source: &str) -> Result<String> {
+    if source.starts_with('/') || source.starts_with('.') || source.starts_with('~') {
+        return Ok(source.to_string());
+    }
+    let base = std::env::var("ORIGIN_VOLUMES_DIR").unwrap_or_else(|_| "/var/lib/tpt-boxcar/volumes".to_string());
+    let path = std::path::PathBuf::from(&base).join(source);
+    std::fs::create_dir_all(&path)
+        .with_context(|| format!("failed to create managed volume directory {}", path.display()))?;
+    Ok(path.to_string_lossy().to_string())
+}
+
 /// Hex-encoded sha256 of the given bytes, used both for signature
 /// verification context and to tag captured invocations with the exact
 /// module content that produced them.
@@ -62,7 +80,20 @@ pub struct RunningService {
     child: Option<tokio::process::Child>,
     /// Set only for `type: oci` services started via containerd, so
     /// `stop_service` knows which containerd container/task to tear down.
+    /// Only read on Linux+`containerd` builds; other targets can't run OCI
+    /// services at all (see `start_oci`'s non-Linux stub).
+    #[cfg_attr(not(all(target_os = "linux", feature = "containerd")), allow(dead_code))]
     containerd_container_id: Option<String>,
+    /// Consecutive failed `healthcheck` probes, reset to 0 on any success.
+    /// Compared against `HealthCheck.retries` to decide when to actually
+    /// mark the service `Failed` rather than transiently `HealthChecking`.
+    #[cfg_attr(not(all(target_os = "linux", feature = "containerd")), allow(dead_code))]
+    health_failures: u32,
+    /// When `poll_healthchecks` last actually ran a probe for this service,
+    /// so calls more frequent than `HealthCheck.interval_secs` are no-ops
+    /// rather than hammering the container with exec probes.
+    #[cfg_attr(not(all(target_os = "linux", feature = "containerd")), allow(dead_code))]
+    last_health_check: Option<std::time::Instant>,
 }
 
 /// Serializable view of a [`RunningService`], for embedders that hold an
@@ -263,12 +294,23 @@ impl RuntimeManager {
             .and_then(|r| r.cpu.as_deref())
             .and_then(|s| s.trim().parse::<f64>().ok());
 
+        let mut mounts = Vec::with_capacity(service.volumes.len());
+        for v in &service.volumes {
+            let host_source = resolve_volume_source(&v.source)?;
+            mounts.push(crate::containerd::MountSpec {
+                host_source,
+                container_target: v.target.clone(),
+                read_only: v.read_only,
+            });
+        }
+
         let spec = ContainerSpec {
             image_ref: service.image.clone(),
             command: service.command.clone(),
             env: service.environment.clone(),
             memory_limit_bytes,
             cpu_limit,
+            mounts,
         };
 
         let pid = client
@@ -285,6 +327,8 @@ impl RuntimeManager {
                 pid: Some(pid),
                 child: None,
                 containerd_container_id: Some(name.to_string()),
+                health_failures: 0,
+                last_health_check: None,
             },
         );
         Ok(())
@@ -370,6 +414,8 @@ impl RuntimeManager {
                 pid: None,
                 child: None,
                 containerd_container_id: None,
+                health_failures: 0,
+                last_health_check: None,
             },
         );
         Ok(())
@@ -415,6 +461,8 @@ impl RuntimeManager {
                 pid,
                 child: Some(child),
                 containerd_container_id: None,
+                health_failures: 0,
+                last_health_check: None,
             },
         );
         Ok(())
@@ -451,6 +499,158 @@ impl RuntimeManager {
             self.stop_service(&name).await?;
         }
         Ok(())
+    }
+
+    /// Checks each running service for an exit its manifest didn't ask for
+    /// and, if `restart_policy` allows it, actually restarts it — real
+    /// crash recovery, unlike before where a crashed service just silently
+    /// disappeared from tracking with no way back. Poll-based (call this
+    /// periodically) rather than event-driven, since wiring a background
+    /// watcher per service would need `RuntimeManager` to be shared behind
+    /// `Arc<Mutex<_>>` across tasks — a larger refactor deferred for now.
+    /// Returns the names of services that were restarted.
+    pub async fn reap_and_restart(&mut self, manifest: &Manifest) -> Result<Vec<String>> {
+        let mut restarted = Vec::new();
+        let names: Vec<String> = self.services.keys().cloned().collect();
+
+        for name in names {
+            let exit = self.check_exited(&name).await;
+            let Some(succeeded) = exit else { continue };
+
+            let Some(service) = manifest.services.get(&name) else { continue };
+            let policy = service.restart_policy();
+            let should_restart = match policy {
+                RestartPolicy::Never => false,
+                RestartPolicy::Always => true,
+                RestartPolicy::OnFailure => !succeeded,
+            };
+
+            if let Some(svc) = self.services.get_mut(&name) {
+                svc.status = ServiceStatus::Failed(format!(
+                    "exited {}",
+                    if succeeded { "successfully" } else { "with failure" }
+                ));
+            }
+
+            if should_restart {
+                tracing::info!("service '{name}' exited unexpectedly, restarting (policy: {policy:?})");
+                self.services.remove(&name);
+                self.start_service(&name, service).await?;
+                restarted.push(name);
+            }
+        }
+
+        Ok(restarted)
+    }
+
+    /// Returns `Some(true)` if the service exited successfully, `Some(false)`
+    /// if it exited with failure, or `None` if it's still running (or its
+    /// liveness can't be determined, e.g. no containerd client connected).
+    async fn check_exited(&mut self, name: &str) -> Option<bool> {
+        // containerd task liveness must be checked before taking a mutable
+        // borrow of `self.services` below, since both live on `self`.
+        #[cfg(all(target_os = "linux", feature = "containerd"))]
+        let containerd_container_id = self.services.get(name).and_then(|s| s.containerd_container_id.clone());
+        #[cfg(all(target_os = "linux", feature = "containerd"))]
+        let containerd_exited = if let Some(container_id) = containerd_container_id {
+            match self.containerd.as_ref() {
+                Some(client) => match client.task_pid(&container_id).await {
+                    Ok(None) => Some(true), // gone; treat as a clean exit (real exit code isn't surfaced by task_pid)
+                    Ok(Some(_)) => None,    // still running
+                    Err(_) => None,         // can't determine right now; don't false-positive a restart
+                },
+                None => None,
+            }
+        } else {
+            None
+        };
+
+        let svc = self.services.get_mut(name)?;
+        if let Some(child) = svc.child.as_mut() {
+            if let Ok(Some(status)) = child.try_wait() {
+                return Some(status.success());
+            }
+            return None;
+        }
+
+        #[cfg(all(target_os = "linux", feature = "containerd"))]
+        return containerd_exited;
+        #[cfg(not(all(target_os = "linux", feature = "containerd")))]
+        None
+    }
+
+    /// Polls `OCIService.healthcheck` for every running OCI service whose
+    /// `interval_secs` has elapsed since its last probe, actually exec'ing
+    /// the configured command inside the container (not just checking
+    /// whether the top-level task process is alive) and driving
+    /// `RunningService.status` through `HealthChecking` to `Failed` after
+    /// `retries` consecutive failures. Poll-based like `reap_and_restart`
+    /// (intended to be called periodically from a supervising loop).
+    /// Returns the names of services that just transitioned to `Failed`
+    /// because of a healthcheck (as opposed to a process/task exit, which
+    /// `reap_and_restart` handles separately).
+    pub async fn poll_healthchecks(&mut self, manifest: &Manifest) -> Result<Vec<String>> {
+        #[cfg_attr(not(all(target_os = "linux", feature = "containerd")), allow(unused_mut))]
+        let mut newly_failed = Vec::new();
+
+        #[cfg(all(target_os = "linux", feature = "containerd"))]
+        {
+            let names: Vec<String> = self.services.keys().cloned().collect();
+            for name in names {
+                let Some(Service::OCI(oci)) = manifest.services.get(&name) else { continue };
+                let Some(healthcheck) = &oci.healthcheck else { continue };
+
+                let due = self.services.get(&name).is_some_and(|svc| {
+                    svc.last_health_check
+                        .map(|t| t.elapsed() >= std::time::Duration::from_secs(healthcheck.interval_secs))
+                        .unwrap_or(true)
+                });
+                if !due {
+                    continue;
+                }
+
+                let Some(container_id) =
+                    self.services.get(&name).and_then(|s| s.containerd_container_id.clone())
+                else {
+                    continue;
+                };
+                let Some(client) = self.containerd.as_ref() else { continue };
+
+                let healthy = client
+                    .exec_healthcheck(
+                        &container_id,
+                        &healthcheck.command,
+                        std::time::Duration::from_secs(healthcheck.timeout_secs),
+                    )
+                    .await
+                    .unwrap_or(false);
+
+                if let Some(svc) = self.services.get_mut(&name) {
+                    svc.last_health_check = Some(std::time::Instant::now());
+                    if healthy {
+                        svc.health_failures = 0;
+                        if matches!(svc.status, ServiceStatus::HealthChecking) {
+                            svc.status = ServiceStatus::Running;
+                        }
+                    } else {
+                        svc.health_failures += 1;
+                        if svc.health_failures >= healthcheck.retries {
+                            svc.status = ServiceStatus::Failed(format!(
+                                "healthcheck failed {} consecutive times",
+                                svc.health_failures
+                            ));
+                            newly_failed.push(name.clone());
+                        } else {
+                            svc.status = ServiceStatus::HealthChecking;
+                        }
+                    }
+                }
+            }
+        }
+        #[cfg(not(all(target_os = "linux", feature = "containerd")))]
+        let _ = manifest;
+
+        Ok(newly_failed)
     }
 
     pub fn get_status(&self, name: &str) -> Option<&ServiceStatus> {
@@ -496,6 +696,7 @@ mod tests {
             depends_on: vec![],
             expected_signature: None,
             trusted_public_key: None,
+            restart_policy: Default::default(),
         }
     }
 
@@ -653,5 +854,86 @@ mod tests {
         let out_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures");
         std::fs::create_dir_all(&out_dir).unwrap();
         std::fs::write(out_dir.join("hello.wasm"), &wasm_bytes).unwrap();
+    }
+
+    fn short_lived_command() -> Vec<String> {
+        // Must not exit *immediately* (start_process fails fast on that,
+        // treating it as a bad command) but must exit well before the
+        // test's own wait below, so `reap_and_restart` has something real
+        // to detect.
+        if cfg!(windows) {
+            vec!["ping".to_string(), "-n".to_string(), "2".to_string(), "127.0.0.1".to_string()]
+        } else {
+            vec!["sh".to_string(), "-c".to_string(), "sleep 0.3".to_string()]
+        }
+    }
+
+    #[tokio::test]
+    async fn reap_and_restart_brings_back_a_crashed_process_with_always_policy() {
+        let mut manager = RuntimeManager::new();
+        let service = Service::Process(ProcessService {
+            command: short_lived_command(),
+            environment: HashMap::new(),
+            working_dir: None,
+            depends_on: vec![],
+            restart_policy: crate::manifest::RestartPolicy::Always,
+        });
+        let mut services = HashMap::new();
+        services.insert("flaky".to_string(), service.clone());
+        let manifest = Manifest {
+            name: "reap-test".to_string(),
+            version: String::new(),
+            services,
+            networks: HashMap::new(),
+            volumes: HashMap::new(),
+        };
+
+        manager.start_service("flaky", &service).await.expect("should start");
+        let first_pid = manager.list_services().get("flaky").unwrap().pid;
+        assert_eq!(manager.get_status("flaky"), Some(&ServiceStatus::Running));
+
+        // Let the short-lived command actually exit.
+        tokio::time::sleep(std::time::Duration::from_millis(1500)).await;
+
+        let restarted = manager.reap_and_restart(&manifest).await.expect("reap should not error");
+        assert_eq!(restarted, vec!["flaky".to_string()]);
+        assert_eq!(manager.get_status("flaky"), Some(&ServiceStatus::Running), "service should be running again after restart");
+
+        let second_pid = manager.list_services().get("flaky").unwrap().pid;
+        assert!(second_pid.is_some(), "restarted process should have a real pid");
+        assert_ne!(first_pid, second_pid, "restart should spawn a genuinely new process");
+
+        manager.stop_service("flaky").await.ok();
+    }
+
+    #[tokio::test]
+    async fn reap_and_restart_leaves_a_never_policy_service_stopped() {
+        let mut manager = RuntimeManager::new();
+        let service = Service::Process(ProcessService {
+            command: short_lived_command(),
+            environment: HashMap::new(),
+            working_dir: None,
+            depends_on: vec![],
+            restart_policy: crate::manifest::RestartPolicy::Never,
+        });
+        let mut services = HashMap::new();
+        services.insert("one-shot".to_string(), service.clone());
+        let manifest = Manifest {
+            name: "reap-test".to_string(),
+            version: String::new(),
+            services,
+            networks: HashMap::new(),
+            volumes: HashMap::new(),
+        };
+
+        manager.start_service("one-shot", &service).await.expect("should start");
+        tokio::time::sleep(std::time::Duration::from_millis(1500)).await;
+
+        let restarted = manager.reap_and_restart(&manifest).await.expect("reap should not error");
+        assert!(restarted.is_empty(), "restart_policy: never must not be restarted");
+        assert!(
+            matches!(manager.get_status("one-shot"), Some(ServiceStatus::Failed(_))),
+            "service should be marked Failed, not silently forgotten"
+        );
     }
 }
