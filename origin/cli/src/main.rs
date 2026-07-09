@@ -52,9 +52,17 @@ enum OriginCommands {
         manifest: PathBuf,
         /// Watch source directories for changes and restart affected services.
         /// Monitors directories containing service source files (wasm modules,
-        /// process binaries, Dockerfiles) and triggers a restart on change.
+        /// process binaries, Dockerfiles) and triggers a service restart on
+        /// change. Critical for developer iteration speed.
         #[arg(long)]
         watch: bool,
+        /// Run in rootless mode: uses user namespaces and slirp4netns for
+        /// networking so `tpt origin up` works without root privileges.
+        /// Requires rootless containerd (socket at
+        /// $XDG_RUNTIME_DIR/containerd/containerd.sock) and slirp4netns to
+        /// be installed.
+        #[arg(long)]
+        rootless: bool,
     },
     /// Tear down all running services
     Down,
@@ -103,6 +111,26 @@ enum OriginCommands {
         #[arg(long, default_value = "http://localhost:8081")]
         scope_url: String,
     },
+    /// Show detailed configuration and runtime state for a service
+    Inspect {
+        /// Service name to inspect
+        service: String,
+        /// Path to manifest file
+        #[arg(short, long, default_value = "manifest.yaml")]
+        manifest: PathBuf,
+        /// Output as JSON instead of human-readable format
+        #[arg(long)]
+        json: bool,
+    },
+    /// Show live CPU/memory/network usage per service
+    Stats {
+        /// Path to manifest file
+        #[arg(short, long, default_value = "manifest.yaml")]
+        manifest: PathBuf,
+        /// Continuously refresh stats (like `docker stats`)
+        #[arg(short, long)]
+        follow: bool,
+    },
 }
 
 #[tokio::main]
@@ -119,7 +147,7 @@ async fn main() -> anyhow::Result<()> {
     match cli.command {
         Commands::Origin { command } => match command {
             OriginCommands::Init { dir } => cmd_init(&dir).await,
-            OriginCommands::Up { manifest, watch } => cmd_up(&manifest, watch).await,
+            OriginCommands::Up { manifest, watch, rootless } => cmd_up(&manifest, watch, rootless).await,
             OriginCommands::Down => cmd_down().await,
             OriginCommands::Ps => cmd_ps().await,
             OriginCommands::Logs { service, follow } => cmd_logs(&service, follow).await,
@@ -135,8 +163,14 @@ async fn main() -> anyhow::Result<()> {
                 service,
                 scope_url,
             } => cmd_replay(&manifest, &service, &scope_url).await,
+            OriginCommands::Inspect {
+                service,
+                manifest,
+                json,
+            } => cmd_inspect(&service, &manifest, json).await,
+            OriginCommands::Stats { manifest, follow } => cmd_stats(&manifest, follow).await,
         },
-        Commands::Up { manifest } => cmd_up(&manifest, false).await,
+        Commands::Up { manifest } => cmd_up(&manifest, false, false).await,
         Commands::Down => cmd_down().await,
     }
 }
@@ -154,13 +188,32 @@ async fn cmd_init(dir: &PathBuf) -> anyhow::Result<()> {
     Ok(())
 }
 
-async fn cmd_up(manifest_path: &PathBuf) -> anyhow::Result<()> {
+async fn cmd_up(manifest_path: &PathBuf, watch: bool, rootless: bool) -> anyhow::Result<()> {
     if !manifest_path.exists() {
         anyhow::bail!("Manifest not found: {}", manifest_path.display());
     }
 
     let content = std::fs::read_to_string(manifest_path)?;
     let manifest: tpt_origin_core::manifest::Manifest = serde_yaml::from_str(&content)?;
+
+    if rootless {
+        println!("Running in rootless mode");
+        // Point containerd client to the rootless socket if not already set
+        if std::env::var("ORIGIN_CONTAINERD_SOCKET").is_err() {
+            let runtime_dir = std::env::var("XDG_RUNTIME_DIR").unwrap_or_else(|_| {
+                #[cfg(unix)]
+                {
+                    format!("/run/user/{}", unsafe { libc::getuid() })
+                }
+                #[cfg(not(unix))]
+                {
+                    "/tmp/runtime".to_string()
+                }
+            });
+            let rootless_socket = format!("{runtime_dir}/containerd/containerd.sock");
+            std::env::set_var("ORIGIN_CONTAINERD_SOCKET", &rootless_socket);
+        }
+    }
 
     println!("Bringing up environment: {}", manifest.name);
     println!("Services:");
@@ -178,7 +231,11 @@ async fn cmd_up(manifest_path: &PathBuf) -> anyhow::Result<()> {
         }
     }
 
-    let mut origin = tpt_origin_core::Origin::new(&manifest);
+    let mut origin = if rootless {
+        tpt_origin_core::Origin::new_rootless(&manifest)
+    } else {
+        tpt_origin_core::Origin::new(&manifest)
+    };
     origin.up(&manifest).await?;
 
     let state_dir = manifest_path
@@ -209,13 +266,22 @@ async fn cmd_up(manifest_path: &PathBuf) -> anyhow::Result<()> {
     )?;
 
     println!("\nAll services are running. Press Ctrl+C to stop.");
-    // The embeddable `Origin` facade deliberately doesn't expose
-    // `wait_for_signal` (a CLI-only concern), so the CLI waits on ctrl_c
-    // itself. In between, it's also the one place that actually drives the
-    // poll-based `reap_and_restart`/`poll_healthchecks` loop — until now
-    // both were only callable, never invoked automatically by anything.
+
+    if watch {
+        run_with_watch(&mut origin, &manifest, state_dir).await
+    } else {
+        run_supervisor(&mut origin, &manifest, state_dir).await
+    }
+}
+
+/// Standard supervision loop without file watching.
+async fn run_supervisor(
+    origin: &mut tpt_origin_core::Origin,
+    manifest: &tpt_origin_core::manifest::Manifest,
+    state_dir: &std::path::Path,
+) -> anyhow::Result<()> {
     let mut supervise_tick = tokio::time::interval(std::time::Duration::from_secs(5));
-    supervise_tick.tick().await; // first tick fires immediately; skip it
+    supervise_tick.tick().await;
     loop {
         tokio::select! {
             _ = tokio::signal::ctrl_c() => {
@@ -223,10 +289,10 @@ async fn cmd_up(manifest_path: &PathBuf) -> anyhow::Result<()> {
                 break;
             }
             _ = supervise_tick.tick() => {
-                if let Err(e) = origin.reap_and_restart(&manifest).await {
+                if let Err(e) = origin.reap_and_restart(manifest).await {
                     tracing::warn!("reap_and_restart failed: {e}");
                 }
-                if let Err(e) = origin.poll_healthchecks(&manifest).await {
+                if let Err(e) = origin.poll_healthchecks(manifest).await {
                     tracing::warn!("poll_healthchecks failed: {e}");
                 }
             }
@@ -235,6 +301,183 @@ async fn cmd_up(manifest_path: &PathBuf) -> anyhow::Result<()> {
     origin.down().await?;
     state::clear(state_dir)?;
     Ok(())
+}
+
+/// Supervision loop with file watching: monitors source directories for
+/// changes and restarts affected services on file modification.
+async fn run_with_watch(
+    origin: &mut tpt_origin_core::Origin,
+    manifest: &tpt_origin_core::manifest::Manifest,
+    state_dir: &std::path::Path,
+) -> anyhow::Result<()> {
+    use notify::{Event, EventKind, RecommendedWatcher, RecursiveMode, Watcher};
+    use tokio::sync::mpsc;
+
+    // Collect watch paths from the manifest: directories containing
+    // service source files (wasm module parents, process command dirs, etc.)
+    let mut watch_dirs: Vec<std::path::PathBuf> = Vec::new();
+    let manifest_dir = manifest_path_for(manifest);
+
+    for (_name, service) in &manifest.services {
+        match service {
+            tpt_origin_core::manifest::Service::Wasm(wasm) => {
+                if let Some(parent) = wasm.path.parent() {
+                    let dir = resolve_watch_dir(parent, &manifest_dir);
+                    if !watch_dirs.contains(&dir) {
+                        tracing::info!("watching wasm source dir: {}", dir.display());
+                        watch_dirs.push(dir);
+                    }
+                }
+            }
+            tpt_origin_core::manifest::Service::Process(process) => {
+                if let Some(program) = process.command.first() {
+                    // Watch the directory containing the program binary/script
+                    let path = std::path::Path::new(program);
+                    if path.is_relative() {
+                        let dir = resolve_watch_dir(path.parent().unwrap_or(std::path::Path::new(".")), &manifest_dir);
+                        if !watch_dirs.contains(&dir) {
+                            tracing::info!("watching process source dir: {}", dir.display());
+                            watch_dirs.push(dir);
+                        }
+                    }
+                }
+            }
+            _ => {} // OCI services use images, not local source
+        }
+    }
+
+    if watch_dirs.is_empty() {
+        tracing::warn!("no watchable source directories found in manifest; --watch has nothing to monitor");
+        run_supervisor(origin, manifest, state_dir).await?;
+        return Ok(());
+    }
+
+    println!("Watching {} directory for changes...", watch_dirs.len());
+    for dir in &watch_dirs {
+        println!("  - {}", dir.display());
+    }
+    println!("Press Ctrl+C to stop.\n");
+
+    let (tx, mut rx) = mpsc::channel::<notify::Result<Event>>(64);
+    let mut watcher: RecommendedWatcher =
+        Watcher::new(move |res| { let _ = tx.blocking_send(res); }, notify::Config::default().with_poll_interval(std::time::Duration::from_secs(2)))?;
+
+    for dir in &watch_dirs {
+        watcher.watch(dir, RecursiveMode::Recursive)?;
+    }
+
+    let mut supervise_tick = tokio::time::interval(std::time::Duration::from_secs(5));
+    supervise_tick.tick().await;
+    // Debounce: skip restarts within 500ms of each other
+    let mut last_restart = std::time::Instant::now() - std::time::Duration::from_secs(10);
+
+    loop {
+        tokio::select! {
+            _ = tokio::signal::ctrl_c() => {
+                tracing::info!("Received shutdown signal");
+                break;
+            }
+            _ = supervise_tick.tick() => {
+                if let Err(e) = origin.reap_and_restart(manifest).await {
+                    tracing::warn!("reap_and_restart failed: {e}");
+                }
+                if let Err(e) = origin.poll_healthchecks(manifest).await {
+                    tracing::warn!("poll_healthchecks failed: {e}");
+                }
+            }
+            event = rx.recv() => {
+                match event {
+                    Some(Ok(Event { kind: EventKind::Modify(_), paths, .. })) => {
+                        if last_restart.elapsed() < std::time::Duration::from_millis(500) {
+                            continue; // debounce
+                        }
+                        // Find which services are affected by the changed files
+                        let affected = find_affected_services(&paths, manifest, &manifest_dir);
+                        if affected.is_empty() {
+                            continue;
+                        }
+                        last_restart = std::time::Instant::now();
+                        for service_name in &affected {
+                            println!("\nDetected change in '{service_name}', restarting...");
+                            if let Err(e) = origin.restart_service(service_name, manifest).await {
+                                tracing::warn!("failed to restart '{service_name}': {e}");
+                            } else {
+                                println!("Restarted '{service_name}' successfully.");
+                            }
+                        }
+                    }
+                    _ => {} // ignore other event types and errors
+                }
+            }
+        }
+    }
+    drop(watcher);
+    origin.down().await?;
+    state::clear(state_dir)?;
+    Ok(())
+}
+
+/// Returns the manifest's parent directory, used as the base for resolving
+/// relative paths in the manifest.
+fn manifest_path_for(_manifest: &tpt_origin_core::manifest::Manifest) -> std::path::PathBuf {
+    // The manifest path isn't stored on the Manifest struct, so we use cwd.
+    // This is the same assumption the CLI already makes.
+    std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."))
+}
+
+/// Resolves a relative directory against the manifest base directory.
+fn resolve_watch_dir(dir: &std::path::Path, base: &std::path::Path) -> std::path::PathBuf {
+    if dir.is_absolute() {
+        dir.to_path_buf()
+    } else {
+        base.join(dir)
+    }
+}
+
+/// Given a set of changed file paths, returns the names of services that
+/// are affected (i.e. the changed file is in a directory related to that
+/// service's source).
+fn find_affected_services(
+    changed: &[std::path::PathBuf],
+    manifest: &tpt_origin_core::manifest::Manifest,
+    manifest_dir: &std::path::Path,
+) -> Vec<String> {
+    let mut affected = Vec::new();
+
+    for (name, service) in &manifest.services {
+        let is_affected = match service {
+            tpt_origin_core::manifest::Service::Wasm(wasm) => {
+                if let Some(parent) = wasm.path.parent() {
+                    let service_dir = resolve_watch_dir(parent, manifest_dir);
+                    changed.iter().any(|p| p.starts_with(&service_dir))
+                } else {
+                    false
+                }
+            }
+            tpt_origin_core::manifest::Service::Process(process) => {
+                if let Some(program) = process.command.first() {
+                    let path = std::path::Path::new(program);
+                    if path.is_relative() {
+                        let service_dir = resolve_watch_dir(
+                            path.parent().unwrap_or(std::path::Path::new(".")),
+                            manifest_dir,
+                        );
+                        changed.iter().any(|p| p.starts_with(&service_dir))
+                    } else {
+                        false
+                    }
+                } else {
+                    false
+                }
+            }
+            _ => false,
+        };
+        if is_affected {
+            affected.push(name.clone());
+        }
+    }
+
+    affected
 }
 
 fn chrono_now() -> String {
@@ -316,17 +559,20 @@ async fn cmd_logs(service: &str, follow: bool) -> anyhow::Result<()> {
             anyhow::anyhow!("service '{service}' not found in the running environment")
         })?;
 
-    if svc.service_type != "oci" {
-        anyhow::bail!(
-            "real log capture is only wired up for `type: oci` services so far; \
-             '{service}' is `type: {}` — its output is inherited directly into this terminal's `tpt origin up`",
-            svc.service_type
-        );
-    }
-
+    // For OCI services, log capture is handled by containerd's `--log-uri`.
+    // For process services with `logging.driver: file`, log capture is
+    // handled by in-process LogRotation. For wasm services, output goes
+    // directly to the terminal. All types now write to the same log path
+    // when file-based logging is enabled.
     let path = oci_log_path(service);
     if !path.exists() {
-        anyhow::bail!("no captured log file found at {} yet", path.display());
+        anyhow::bail!(
+            "no captured log file found at {} yet; \
+             for '{}' (type: {}), logs may go directly to the terminal",
+            path.display(),
+            service,
+            svc.service_type
+        );
     }
 
     use std::io::{Read, Seek, SeekFrom};
@@ -608,6 +854,245 @@ async fn cmd_replay(manifest_path: &PathBuf, service: &str, scope_url: &str) -> 
     Ok(())
 }
 
+async fn cmd_inspect(service: &str, manifest_path: &PathBuf, json_output: bool) -> anyhow::Result<()> {
+    let content = std::fs::read_to_string(manifest_path)?;
+    let manifest: tpt_origin_core::manifest::Manifest = serde_yaml::from_str(&content)?;
+
+    let env = state::read(std::path::Path::new("."))
+        .ok()
+        .flatten();
+
+    // Build an Origin instance to inspect from, using the manifest.
+    let origin = tpt_origin_core::Origin::new(&manifest);
+
+    if let Some(info) = origin.inspect(service, &manifest) {
+        if json_output {
+            println!("{}", serde_json::to_string_pretty(&info)?);
+        } else {
+            print_inspect_info(&info);
+        }
+    } else if let Some(env) = env {
+        // Service not in live state; try to show from state file + manifest only.
+        if let Some(svc) = env.services.iter().find(|s| s.name == service) {
+            println!("Service: {}", svc.name);
+            println!("Type:    {}", svc.service_type);
+            println!("PID:     {}", svc.pid.map(|p| p.to_string()).unwrap_or_else(|| "N/A".to_string()));
+            println!();
+            println!("(Service is recorded in state but not currently live in this Origin instance)");
+        } else {
+            anyhow::bail!("service '{service}' not found in running environment or manifest");
+        }
+    } else {
+        anyhow::bail!(
+            "service '{service}' not found in manifest. Run `tpt origin up` first to start services, \
+             or check the manifest for the correct service name."
+        );
+    }
+
+    Ok(())
+}
+
+fn print_inspect_info(info: &tpt_origin_core::lifecycle::InspectInfo) {
+    println!("Name:        {}", info.name);
+    println!("Type:        {}", info.service_type);
+    println!("Status:      {:?}", info.status);
+    if let Some(pid) = info.pid {
+        println!("PID:         {pid}");
+    }
+    println!("Restarts:    {}", info.restart_count);
+    if let Some(millis) = info.started_at_unix_millis {
+        let started = std::time::UNIX_EPOCH + std::time::Duration::from_millis(millis);
+        let elapsed = started.elapsed().unwrap_or_default();
+        println!("Uptime:      {}", format_duration(elapsed));
+    }
+
+    if let Some(ref image) = info.image {
+        println!("Image:       {image}");
+    }
+    if let Some(ref cmd) = info.command {
+        println!("Command:     {}", cmd.join(" "));
+    }
+    if let Some(ref path) = info.path {
+        println!("Path:        {}", path.display());
+    }
+    if let Some(ref wd) = info.working_dir {
+        println!("Working Dir: {}", wd.display());
+    }
+
+    if !info.environment.is_empty() {
+        println!("Environment:");
+        for (k, v) in &info.environment {
+            println!("  {k}={v}");
+        }
+    }
+
+    if !info.ports.is_empty() {
+        println!("Ports:");
+        for p in &info.ports {
+            println!("  {}:{}/{}", p.host, p.container, p.protocol);
+        }
+    }
+
+    if !info.volumes.is_empty() {
+        println!("Volumes:");
+        for v in &info.volumes {
+            let mode = if v.read_only { "ro" } else { "rw" };
+            println!("  {} -> {} ({})", v.source, v.target, mode);
+        }
+    }
+
+    if !info.depends_on.is_empty() {
+        println!("Depends On:  {}", info.depends_on.join(", "));
+    }
+
+    if let Some(ref hc) = info.healthcheck {
+        println!("Health Check:");
+        println!("  Command:  {}", hc.command.join(" "));
+        println!("  Interval: {}s", hc.interval_secs);
+        println!("  Timeout:  {}s", hc.timeout_secs);
+        println!("  Retries:  {}", hc.retries);
+    }
+
+    if let Some(ref res) = info.resources {
+        println!("Resources:");
+        if let Some(ref cpu) = res.cpu {
+            println!("  CPU:    {cpu}");
+        }
+        if let Some(ref mem) = res.memory {
+            println!("  Memory: {mem}");
+        }
+    }
+
+    if let Some(ref sec) = info.security {
+        println!("Security:");
+        if !sec.cap_add.is_empty() {
+            println!("  Capabilities: add {}", sec.cap_add.join(", "));
+        }
+        if !sec.cap_drop.is_empty() {
+            println!("  Capabilities: drop {}", sec.cap_drop.join(", "));
+        }
+        if sec.read_only {
+            println!("  Read Only:    true");
+        }
+        if sec.no_new_privileges {
+            println!("  No New Privileges: true");
+        }
+    }
+
+    if let Some(ref logging) = info.logging {
+        println!("Logging:");
+        println!("  Driver:   {}", logging.driver);
+        if let Some(ref max_size) = logging.max_size {
+            println!("  Max Size: {max_size}");
+        }
+        if let Some(max_file) = logging.max_file {
+            println!("  Max File: {max_file}");
+        }
+    }
+
+    if let Some(ref secrets) = info.secrets {
+        if !secrets.is_empty() {
+            println!("Secrets:");
+            for s in secrets {
+                println!("  {} -> {}", s.name, s.target);
+            }
+        }
+    }
+}
+
+fn format_duration(d: std::time::Duration) -> String {
+    let secs = d.as_secs();
+    if secs < 60 {
+        format!("{secs}s")
+    } else if secs < 3600 {
+        format!("{}m {}s", secs / 60, secs % 60)
+    } else {
+        let hours = secs / 3600;
+        let mins = (secs % 3600) / 60;
+        format!("{hours}h {mins}m")
+    }
+}
+
+async fn cmd_stats(manifest_path: &PathBuf, follow: bool) -> anyhow::Result<()> {
+    let content = std::fs::read_to_string(manifest_path)?;
+    let manifest: tpt_origin_core::manifest::Manifest = serde_yaml::from_str(&content)?;
+
+    let origin = tpt_origin_core::Origin::new(&manifest);
+
+    if follow {
+        // Continuous refresh mode: clear screen and reprint every 2s.
+        loop {
+            let stats = origin.collect_stats();
+            // Clear screen and move cursor to top-left.
+            print!("\x1B[2J\x1B[1;1H");
+            print_stats_table(&stats);
+            tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+        }
+    } else {
+        let stats = origin.collect_stats();
+        print_stats_table(&stats);
+    }
+
+    Ok(())
+}
+
+fn print_stats_table(stats: &[tpt_origin_core::stats::ServiceStats]) {
+    if stats.is_empty() {
+        println!("No running services found. Run `tpt origin up` first.");
+        return;
+    }
+
+    println!(
+        "{:<20} {:>8} {:>15} {:>15} {:>12} {:>8}",
+        "NAME", "CPU %", "MEM USAGE", "MEM LIMIT", "NET I/O", "UPTIME"
+    );
+    println!(
+        "{:<20} {:>8} {:>15} {:>15} {:>12} {:>8}",
+        "----", "-----", "----------", "----------", "-------", "------"
+    );
+
+    for s in stats {
+        let cpu_str = s
+            .cpu_percent
+            .map(|c| format!("{c:.1}%"))
+            .unwrap_or_else(|| "N/A".to_string());
+
+        let mem_str = s
+            .memory_rss_bytes
+            .map(|b| tpt_origin_core::stats::format_bytes(b))
+            .unwrap_or_else(|| "N/A".to_string());
+
+        let limit_str = s
+            .memory_limit_bytes
+            .map(|b| tpt_origin_core::stats::format_bytes(b))
+            .unwrap_or_else(|| "unlimited".to_string());
+
+        let net_str = match (s.net_rx_bytes, s.net_tx_bytes) {
+            (Some(rx), Some(tx)) => {
+                format!(
+                    "{}/{}",
+                    tpt_origin_core::stats::format_bytes(rx),
+                    tpt_origin_core::stats::format_bytes(tx)
+                )
+            }
+            _ => "N/A".to_string(),
+        };
+
+        let uptime_str = if s.uptime_secs < 60 {
+            format!("{}s", s.uptime_secs)
+        } else if s.uptime_secs < 3600 {
+            format!("{}m", s.uptime_secs / 60)
+        } else {
+            format!("{}h", s.uptime_secs / 3600)
+        };
+
+        println!(
+            "{:<20} {:>8} {:>15} {:>15} {:>12} {:>8}",
+            s.name, cpu_str, mem_str, limit_str, net_str, uptime_str
+        );
+    }
+}
+
 #[cfg(target_os = "linux")]
 async fn cmd_build(
     dockerfile_path: &PathBuf,
@@ -701,4 +1186,5 @@ async fn cmd_build(
     anyhow::bail!(
         "tpt origin build requires Linux with containerd — \
          this platform is not supported for image building"
- 
+    )
+}

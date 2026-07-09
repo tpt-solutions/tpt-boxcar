@@ -39,6 +39,7 @@ const config = {
       navbar: {
         title: 'TPT Boxcar',
         items: [
+          { type: 'docSidebar', sidebarId: 'useCasesSidebar', position: 'left', label: 'Use Cases' },
           { type: 'docSidebar', sidebarId: 'originSidebar', position: 'left', label: 'Origin' },
           { type: 'docSidebar', sidebarId: 'tetherSidebar', position: 'left', label: 'Tether' },
           { type: 'docSidebar', sidebarId: 'scopeSidebar', position: 'left', label: 'Scope' },

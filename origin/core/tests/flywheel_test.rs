@@ -47,6 +47,10 @@ fn flywheel_manifest(wasm_path: std::path::PathBuf) -> Manifest {
             depends_on: vec![],
             resources: None,
             restart_policy: Default::default(),
+            env_file: None,
+            secrets: None,
+            security: None,
+            logging: None,
         }),
     );
 
@@ -66,6 +70,10 @@ fn flywheel_manifest(wasm_path: std::path::PathBuf) -> Manifest {
             expected_signature: None,
             trusted_public_key: None,
             restart_policy: Default::default(),
+            env_file: None,
+            secrets: None,
+            security: None,
+            logging: None,
         }),
     );
 
@@ -79,6 +87,10 @@ fn flywheel_manifest(wasm_path: std::path::PathBuf) -> Manifest {
             depends_on: vec!["api".to_string()],
             resources: None,
             restart_policy: Default::default(),
+            env_file: None,
+            secrets: None,
+            security: None,
+            logging: None,
         }),
     );
 
@@ -104,6 +116,7 @@ fn flywheel_manifest(wasm_path: std::path::PathBuf) -> Manifest {
         services,
         networks,
         volumes,
+        logging: None,
     }
 }
 

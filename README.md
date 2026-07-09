@@ -44,6 +44,18 @@ cargo build -p tpt-origin
 
 This works today because Origin's `type: process` service kind spawns and tears down real OS processes (unlike `type: oci`/`type: wasm`, which are still bookkeeping-only pending containerd/Wasmtime integration).
 
+## Common Use Cases
+
+Five concrete problems TPT Boxcar solves today — each links to a full walkthrough with a real, runnable example already in this repo:
+
+| Use case | Product | Try it |
+|----------|---------|--------|
+| [Local dev sandbox without a Docker daemon](docs/docs/use-cases/local-dev-sandbox.md) | Origin | `tpt origin init --dir demo && cd demo && tpt origin up` |
+| [DB proxy for Wasm workloads](docs/docs/use-cases/db-proxy.md) | Tether | `go run ./tether/control-plane`, then register `tether/examples/postgres-backend.json` |
+| [Zero-code observability](docs/docs/use-cases/zero-code-observability.md) | Scope | `go run ./scope/backend/cmd/ingest` + `cmd/backend`, then `./scope/examples/send-demo-trace.sh` |
+| [Shrink an image and get a Wasm migration plan](docs/docs/use-cases/image-distillation.md) | Chisel | `chisel analyze <image-dir> && chisel distill <image-dir> --dockerfile` |
+| [Hot-reloadable Wasm plugin gateway](docs/docs/use-cases/plugin-gateway.md) | Frontier | `go run ./frontier/control-plane`, then register `frontier/examples/getting-started/plugin.json` |
+
 ## AI agent integration (MCP)
 
 [`mcp-server/`](mcp-server/README.md) exposes all five products as MCP tools over stdio, so an AI agent (Claude Code, Claude Desktop, etc.) can drive them directly — start a sandbox, distill an image, configure a gateway route, query traces — instead of a human running curl/CLI commands by hand.

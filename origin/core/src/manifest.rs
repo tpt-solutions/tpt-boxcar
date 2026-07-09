@@ -13,6 +13,35 @@ pub struct Manifest {
     pub networks: HashMap<String, Network>,
     #[serde(default)]
     pub volumes: HashMap<String, Volume>,
+    /// Top-level logging configuration applied to all services.
+    /// Per-service `logging:` sections override these values.
+    #[serde(default)]
+    pub logging: Option<LoggingConfig>,
+}
+
+/// Logging driver configuration, analogous to Docker's logging options.
+/// Controls how a service's stdout/stderr is captured and where it goes.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct LoggingConfig {
+    /// Logging driver: `"file"` (default, writes to a local log file with
+    /// optional rotation), `"journald"` (forwards to systemd journal), or
+    /// `"none"` (disables log capture).
+    #[serde(default = "default_log_driver")]
+    pub driver: String,
+    /// Maximum size of a single log file before rotation is triggered.
+    /// Accepts human-readable sizes: `"10m"`, `"1g"`, `"512k"`.
+    /// `None` means unlimited (rotation only by file count).
+    #[serde(default)]
+    pub max_size: Option<String>,
+    /// Number of rotated log files to keep. `Some(3)` means the main log
+    /// file plus `.1`, `.2`, `.3` rotated copies. `None` or `Some(0)`
+    /// disables rotation by count (only by `max_size`).
+    #[serde(default)]
+    pub max_file: Option<u32>,
+}
+
+fn default_log_driver() -> String {
+    "file".to_string()
 }
 
 /// A file-mounted secret, analogous to Docker/K8s secret mounts.
@@ -121,6 +150,15 @@ impl Service {
         }
     }
 
+    /// Per-service logging override, if any.
+    pub fn logging(&self) -> &Option<LoggingConfig> {
+        match self {
+            Service::OCI(s) => &s.logging,
+            Service::Wasm(s) => &s.logging,
+            Service::Process(s) => &s.logging,
+        }
+    }
+
     /// Mutable reference to the environment HashMap, so callers can merge
     /// env_file variables before starting the service.
     pub fn environment_mut(&mut self) -> &mut HashMap<String, String> {
@@ -173,6 +211,13 @@ pub struct ProcessService {
     /// Security hardening: capabilities, read-only rootfs, no_new_privileges.
     #[serde(default)]
     pub security: Option<SecurityConfig>,
+    /// Per-service logging override. When `None`, the manifest-level
+    /// `logging:` config (or built-in defaults) is used.
+    #[serde(default)]
+    pub logging: Option<LoggingConfig>,
+    /// Health check configuration for process services.
+    #[serde(default)]
+    pub healthcheck: Option<HealthCheck>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -200,6 +245,9 @@ pub struct OCIService {
     pub secrets: Option<Vec<SecretMount>>,
     #[serde(default)]
     pub security: Option<SecurityConfig>,
+    /// Per-service logging override.
+    #[serde(default)]
+    pub logging: Option<LoggingConfig>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -234,6 +282,12 @@ pub struct WasmService {
     pub secrets: Option<Vec<SecretMount>>,
     #[serde(default)]
     pub security: Option<SecurityConfig>,
+    /// Per-service logging override.
+    #[serde(default)]
+    pub logging: Option<LoggingConfig>,
+    /// Health check configuration for Wasm services.
+    #[serde(default)]
+    pub healthcheck: Option<HealthCheck>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -258,6 +312,9 @@ pub struct VolumeMount {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct HealthCheck {
+    /// The health check command to execute (for `check_type: exec`).
+    /// Optional: not needed for HTTP/TCP checks.
+    #[serde(default)]
     pub command: Vec<String>,
     #[serde(default = "default_interval")]
     pub interval_secs: u64,
@@ -265,6 +322,34 @@ pub struct HealthCheck {
     pub timeout_secs: u64,
     #[serde(default = "default_retries")]
     pub retries: u32,
+    /// Type of health check probe. Defaults to `exec` for backward
+    /// compatibility with existing manifests that only use `command`.
+    #[serde(default)]
+    pub check_type: CheckType,
+    /// Port to probe for `http` and `tcp` check types. For `exec` checks,
+    /// this field is ignored.
+    #[serde(default)]
+    pub port: Option<u16>,
+    /// URL path for `http` checks (e.g. `/health`). Defaults to `/`.
+    #[serde(default)]
+    pub path: Option<String>,
+}
+
+/// Health check probe type, analogous to Docker/K8s liveness probe types.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CheckType {
+    /// Execute a command inside the container/process. The command must
+    /// exit 0 to be considered healthy. This is the default and matches
+    /// existing `command`-only healthcheck behavior.
+    #[default]
+    Exec,
+    /// HTTP GET request to `http://127.0.0.1:<port><path>`. Healthy if
+    /// the response status is 2xx.
+    Http,
+    /// TCP socket connection to `127.0.0.1:<port>`. Healthy if the
+    /// connection succeeds.
+    Tcp,
 }
 
 fn default_interval() -> u64 {

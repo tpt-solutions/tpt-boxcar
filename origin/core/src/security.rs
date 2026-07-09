@@ -199,6 +199,7 @@ mod tests {
         assert!(args.is_empty());
     }
 
+    #[cfg(target_os = "linux")]
     #[test]
     fn linux_capability_number_known_caps() {
         assert_eq!(linux_capability_number("CHOWN"), Some(0));
@@ -207,6 +208,7 @@ mod tests {
         assert_eq!(linux_capability_number("BPF"), Some(39));
     }
 
+    #[cfg(target_os = "linux")]
     #[test]
     fn linux_capability_number_unknown() {
         assert_eq!(linux_capability_number("FAKE_CAP"), None);

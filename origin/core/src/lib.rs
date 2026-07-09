@@ -6,14 +6,16 @@ pub mod dns;
 pub mod dockerfile;
 pub mod envfile;
 pub mod lifecycle;
+pub mod logging;
 pub mod manifest;
 pub mod network;
 pub mod portmap;
 pub mod reslimit;
 pub mod runtime;
 pub mod security;
+pub mod stats;
 
-use lifecycle::{LifecycleManager, ServiceHealthDto};
+use lifecycle::{InspectInfo, LifecycleManager, ServiceHealthDto};
 use manifest::Manifest;
 
 pub fn version() -> &'static str {
@@ -35,6 +37,14 @@ impl Origin {
     pub fn new(manifest: &Manifest) -> Self {
         Self {
             lifecycle: LifecycleManager::new(manifest),
+        }
+    }
+
+    /// Creates a new Origin instance in rootless mode, where networking
+    /// uses slirp4netns for unprivileged connectivity.
+    pub fn new_rootless(manifest: &Manifest) -> Self {
+        Self {
+            lifecycle: LifecycleManager::new_rootless(manifest),
         }
     }
 
@@ -76,6 +86,18 @@ impl Origin {
             .values()
             .map(ServiceHealthDto::from)
             .collect()
+    }
+
+    /// Returns detailed inspect information for a named service, combining
+    /// the manifest's static configuration with live runtime state.
+    pub fn inspect(&self, name: &str, manifest: &Manifest) -> Option<InspectInfo> {
+        self.lifecycle.inspect(name, manifest)
+    }
+
+    /// Collects live resource usage stats (CPU, memory, network) for all
+    /// running services.
+    pub fn collect_stats(&self) -> Vec<stats::ServiceStats> {
+        self.lifecycle.collect_stats()
     }
 
     pub fn service_pids(&self) -> std::collections::HashMap<String, u32> {

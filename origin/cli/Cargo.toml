@@ -22,3 +22,4 @@ ureq = { version = "2", features = ["json"] }
 portable-pty = "0.8"
 crossterm = { version = "0.28", features = ["event-stream"] }
 notify = "6"
+libc = "0.2"

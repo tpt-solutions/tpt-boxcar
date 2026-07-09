@@ -42,6 +42,29 @@ const NAMESPACE: &str = "tpt-boxcar";
 const SIGTERM: u32 = 15;
 const SIGKILL: u32 = 9;
 
+/// Returns candidate rootless containerd socket paths, checked in order.
+/// Rootless containerd typically runs under the user's XDG_RUNTIME_DIR.
+fn rootless_containerd_sockets() -> Vec<PathBuf> {
+    let mut paths = Vec::new();
+
+    if let Ok(runtime_dir) = std::env::var("XDG_RUNTIME_DIR") {
+        paths.push(PathBuf::from(&runtime_dir).join("containerd/containerd.sock"));
+    }
+
+    if let Ok(uid) = std::env::var("UID") {
+        paths.push(PathBuf::from(format!(
+            "/run/user/{uid}/containerd/containerd.sock"
+        )));
+    }
+
+    // Common rootless containerd socket locations
+    if let Ok(home) = std::env::var("HOME") {
+        paths.push(PathBuf::from(&home).join(".containerd/containerd.sock"));
+    }
+
+    paths
+}
+
 /// A process-unique, monotonically increasing id for `ctr tasks exec
 /// --exec-id`, which containerd requires to be unique per task among
 /// concurrent execs. Not a real UUID — just needs to not collide within
@@ -144,19 +167,16 @@ pub struct ContainerSpec {
     pub security: Option<SecurityConfig>,
 }
 
-/// Directory containerd writes captured task stdout/stderr into (one file
-/// per container id), so `tpt origin logs <service>` has something real to
-/// read instead of the "OCI services aren't captured yet" placeholder.
-/// Overridable via `ORIGIN_LOGS_DIR` so tests/CI can point elsewhere.
-pub fn logs_dir() -> PathBuf {
-    PathBuf::from(
-        std::env::var("ORIGIN_LOGS_DIR").unwrap_or_else(|_| "/var/lib/tpt-boxcar/logs".to_string()),
-    )
+/// Returns the logs directory path. Delegates to `crate::logging::logs_dir`
+/// for the shared implementation, but kept as a re-export here so existing
+/// `containerd`-only code doesn't need to change.
+pub fn logs_dir() -> std::path::PathBuf {
+    crate::logging::logs_dir()
 }
 
 /// Path of the captured combined stdout/stderr log for container `id`.
-pub fn log_path(id: &str) -> PathBuf {
-    logs_dir().join(format!("{id}.log"))
+pub fn log_path(id: &str) -> std::path::PathBuf {
+    crate::logging::log_path(id)
 }
 
 #[derive(Debug, Clone)]
@@ -178,10 +198,26 @@ impl ContainerdClient {
     /// Connects to containerd's gRPC API over its Unix Domain Socket.
     /// Defaults to containerd's standard path but honors
     /// `ORIGIN_CONTAINERD_SOCKET` so tests/CI can point elsewhere.
+    /// Also checks rootless containerd socket paths when running unprivileged.
     pub async fn connect() -> Result<Self> {
-        let socket_path = std::env::var("ORIGIN_CONTAINERD_SOCKET")
-            .unwrap_or_else(|_| "/run/containerd/containerd.sock".to_string());
-        Self::connect_to(&socket_path).await
+        if let Ok(path) = std::env::var("ORIGIN_CONTAINERD_SOCKET") {
+            return Self::connect_to(&path).await;
+        }
+
+        // Check rootless containerd socket paths
+        let rootless_paths = rootless_containerd_sockets();
+        for path in &rootless_paths {
+            if path.exists() {
+                tracing::info!(
+                    "using rootless containerd socket: {}",
+                    path.display()
+                );
+                return Self::connect_to(path).await;
+            }
+        }
+
+        // Fall back to the standard system socket
+        Self::connect_to("/run/containerd/containerd.sock").await
     }
 
     pub async fn connect_to(socket_path: impl AsRef<Path>) -> Result<Self> {

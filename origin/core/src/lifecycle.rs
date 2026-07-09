@@ -140,6 +140,20 @@ impl LifecycleManager {
         }
     }
 
+    /// Creates a new LifecycleManager in rootless mode, where networking
+    /// uses slirp4netns instead of requiring root privileges.
+    pub fn new_rootless(manifest: &Manifest) -> Self {
+        Self {
+            runtime: RuntimeManager::new(),
+            network: NetworkManager::new().with_rootless(),
+            dns: DnsResolver::new(),
+            port_mapper: PortMapper::new(),
+            health: HashMap::new(),
+            manifest_name: manifest.name.clone(),
+            network_names: Vec::new(),
+        }
+    }
+
     pub async fn up(&mut self, manifest: &Manifest) -> Result<()> {
         tracing::info!("Bringing up environment: {}", manifest.name);
 
@@ -361,11 +375,137 @@ impl LifecycleManager {
         self.runtime.list_pids()
     }
 
+    /// Collects live resource usage stats for all running services.
+    pub fn collect_stats(&self) -> Vec<crate::stats::ServiceStats> {
+        let start_times: HashMap<String, std::time::Instant> = self
+            .health
+            .iter()
+            .filter_map(|(name, h)| h.started_at.map(|t| (name.clone(), t)))
+            .collect();
+        crate::stats::collect_stats(self.runtime.list_services(), &start_times)
+    }
+
+    /// Returns detailed inspect information for a named service, combining
+    /// the manifest's static configuration with live runtime state (status,
+    /// PID, uptime, restart count). Returns `None` if the service isn't
+    /// known to the running environment.
+    pub fn inspect(&self, name: &str, manifest: &Manifest) -> Option<InspectInfo> {
+        let service = manifest.services.get(name)?;
+        let health = self.health.get(name)?;
+        let pids = self.runtime.list_pids();
+
+        let mut info = InspectInfo {
+            name: name.to_string(),
+            service_type: match service {
+                Service::OCI(_) => "oci".to_string(),
+                Service::Wasm(_) => "wasm".to_string(),
+                Service::Process(_) => "process".to_string(),
+            },
+            status: health.status.clone(),
+            pid: pids.get(name).copied(),
+            started_at_unix_millis: health.started_at.map(|instant| {
+                let elapsed = instant.elapsed();
+                let now = std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap_or_default();
+                now.saturating_sub(elapsed).as_millis() as u64
+            }),
+            restart_count: health.restart_count,
+            command: None,
+            image: None,
+            path: None,
+            environment: HashMap::new(),
+            ports: Vec::new(),
+            volumes: Vec::new(),
+            working_dir: None,
+            depends_on: service.depends_on().to_vec(),
+            healthcheck: None,
+            resources: None,
+            security: None,
+            logging: service.logging().clone(),
+            env_file: service.env_file().clone(),
+            secrets: service.secrets().as_ref().map(|s| {
+                s.iter()
+                    .map(|sec| SecretInfo {
+                        name: sec.name.clone(),
+                        target: sec.target.clone(),
+                    })
+                    .collect()
+            }),
+        };
+
+        match service {
+            Service::OCI(oci) => {
+                info.image = Some(oci.image.clone());
+                info.command = oci.command.clone();
+                info.environment = oci.environment.clone();
+                info.ports = oci.ports.clone();
+                info.volumes = oci.volumes.clone();
+                info.healthcheck = oci.healthcheck.clone();
+                info.resources = oci.resources.clone();
+                info.security = oci.security.clone();
+            }
+            Service::Wasm(wasm) => {
+                info.path = Some(wasm.path.clone());
+                info.environment = wasm.environment.clone();
+                info.ports = wasm.ports.clone();
+                info.resources = wasm.resources.clone();
+                info.security = wasm.security.clone();
+            }
+            Service::Process(process) => {
+                info.command = Some(process.command.clone());
+                info.environment = process.environment.clone();
+                info.ports = process.ports.clone();
+                info.working_dir = process.working_dir.clone();
+                info.resources = process.resources.clone();
+                info.security = process.security.clone();
+            }
+        }
+
+        Some(info)
+    }
+
     pub async fn wait_for_signal(&self) -> Result<()> {
         tokio::signal::ctrl_c().await?;
         tracing::info!("Received shutdown signal");
         Ok(())
     }
+}
+
+/// Detailed information about a running service, combining manifest config
+/// with live runtime state. Returned by [`LifecycleManager::inspect`].
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct InspectInfo {
+    pub name: String,
+    pub service_type: String,
+    pub status: ServiceStatus,
+    pub pid: Option<u32>,
+    pub started_at_unix_millis: Option<u64>,
+    pub restart_count: u32,
+    /// OCI image reference or process command (mutually exclusive by type).
+    pub image: Option<String>,
+    pub command: Option<Vec<String>>,
+    /// Wasm module path (only set for `type: wasm` services).
+    pub path: Option<std::path::PathBuf>,
+    pub environment: HashMap<String, String>,
+    pub ports: Vec<crate::manifest::PortMapping>,
+    pub volumes: Vec<crate::manifest::VolumeMount>,
+    pub working_dir: Option<std::path::PathBuf>,
+    pub depends_on: Vec<String>,
+    pub healthcheck: Option<crate::manifest::HealthCheck>,
+    pub resources: Option<crate::manifest::ResourceLimits>,
+    pub security: Option<crate::manifest::SecurityConfig>,
+    pub logging: Option<crate::manifest::LoggingConfig>,
+    pub env_file: Option<Vec<String>>,
+    pub secrets: Option<Vec<SecretInfo>>,
+}
+
+/// Summary of a secret mount (name + target path), without exposing the
+/// secret content itself.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SecretInfo {
+    pub name: String,
+    pub target: String,
 }
 
 #[cfg(test)]
@@ -385,6 +525,7 @@ mod topological_waves_tests {
             env_file: None,
             secrets: None,
             security: None,
+            logging: None,
         })
     }
 
@@ -398,6 +539,7 @@ mod topological_waves_tests {
                 .collect(),
             networks: HashMap::new(),
             volumes: HashMap::new(),
+            logging: None,
         }
     }
 

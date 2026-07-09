@@ -6,8 +6,8 @@ use wasmtime_wasi::preview1::WasiP1Ctx;
 use wasmtime_wasi::WasiCtxBuilder;
 
 use crate::envfile;
-use crate::manifest::{Manifest, OCIService, ProcessService, RestartPolicy, SecretMount, Service, WasmService};
-use crate::security;
+use crate::manifest::{Manifest, OCIService, ProcessService, RestartPolicy, Service, WasmService};
+use crate::logging::{self, LogRotation};
 
 #[cfg(all(target_os = "linux", feature = "containerd"))]
 use crate::containerd::{ContainerSpec, ContainerdClient};
@@ -86,6 +86,13 @@ pub struct RunningService {
         allow(dead_code)
     )]
     last_health_check: Option<std::time::Instant>,
+    /// Optional log rotation handle for process/wasm services whose
+    /// `logging.driver` is `"file"`. When present, the child process's
+    /// stdout/stderr is redirected through this writer. Kept alive on the
+    /// `RunningService` so the file handle stays open for the service's
+    /// lifetime.
+    #[allow(dead_code)]
+    log_rotation: Option<LogRotation>,
 }
 
 /// Serializable view of a [`RunningService`], for embedders that hold an
@@ -368,6 +375,7 @@ impl RuntimeManager {
                 containerd_container_id: Some(name.to_string()),
                 health_failures: 0,
                 last_health_check: None,
+                log_rotation: None,
             },
         );
         Ok(())
@@ -489,6 +497,7 @@ impl RuntimeManager {
                 containerd_container_id: None,
                 health_failures: 0,
                 last_health_check: None,
+                log_rotation: None,
             },
         );
         Ok(())
@@ -506,11 +515,42 @@ impl RuntimeManager {
 
         tracing::info!("Starting process: {name} ({})", service.command.join(" "));
 
+        // Resolve the effective logging config: per-service override takes
+        // precedence over the manifest-level default. If `driver` is
+        // `"file"`, redirect the child's stdout/stderr through a rotating
+        // log file.
+        let effective_logging = logging::resolve_logging_config(
+            &service.logging,
+            &None, // manifest-level logging is resolved at the caller (LifecycleManager)
+        );
+
         let mut cmd = tokio::process::Command::new(program);
         cmd.args(args);
         cmd.envs(&service.environment);
         if let Some(dir) = &service.working_dir {
             cmd.current_dir(dir);
+        }
+
+        // Set up log rotation for file-based logging.
+        let mut log_rotation = if effective_logging.driver == "file" {
+            let log_path = crate::logging::log_path(name);
+            match LogRotation::open(&log_path, &effective_logging) {
+                Ok(rot) => Some(rot),
+                Err(e) => {
+                    tracing::warn!("failed to open log file for '{name}': {e:#}");
+                    None
+                }
+            }
+        } else {
+            None
+        };
+
+        // If we have a log rotation handle, redirect child stdout/stderr to it.
+        if let Some(ref mut rot) = log_rotation {
+            let log_file = rot.get_ref().try_clone()?;
+            cmd.stdout(std::process::Stdio::from(log_file));
+            let log_file2 = rot.get_ref().try_clone()?;
+            cmd.stderr(std::process::Stdio::from(log_file2));
         }
 
         // Secrets: for process services, read each secret file and expose
@@ -613,6 +653,7 @@ impl RuntimeManager {
                 containerd_container_id: None,
                 health_failures: 0,
                 last_health_check: None,
+                log_rotation,
             },
         );
         Ok(())
@@ -876,6 +917,7 @@ mod tests {
             env_file: None,
             secrets: None,
             security: None,
+            logging: None,
         }
     }
 
@@ -1063,6 +1105,10 @@ mod tests {
             depends_on: vec![],
             resources: None,
             restart_policy: crate::manifest::RestartPolicy::Always,
+            env_file: None,
+            secrets: None,
+            security: None,
+            logging: None,
         });
         let mut services = HashMap::new();
         services.insert("flaky".to_string(), service.clone());
@@ -1072,6 +1118,7 @@ mod tests {
             services,
             networks: HashMap::new(),
             volumes: HashMap::new(),
+            logging: None,
         };
 
         manager
@@ -1119,6 +1166,10 @@ mod tests {
             depends_on: vec![],
             resources: None,
             restart_policy: crate::manifest::RestartPolicy::Never,
+            env_file: None,
+            secrets: None,
+            security: None,
+            logging: None,
         });
         let mut services = HashMap::new();
         services.insert("one-shot".to_string(), service.clone());
@@ -1128,6 +1179,7 @@ mod tests {
             services,
             networks: HashMap::new(),
             volumes: HashMap::new(),
+            logging: None,
         };
 
         manager

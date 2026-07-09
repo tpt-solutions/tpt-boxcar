@@ -28,6 +28,10 @@ fn sample_manifest(wasm_path: std::path::PathBuf) -> Manifest {
             healthcheck: None,
             resources: None,
             restart_policy: Default::default(),
+            env_file: None,
+            secrets: None,
+            security: None,
+            logging: None,
         }),
     );
     services.insert(
@@ -43,6 +47,10 @@ fn sample_manifest(wasm_path: std::path::PathBuf) -> Manifest {
             expected_signature: None,
             trusted_public_key: None,
             restart_policy: Default::default(),
+            env_file: None,
+            secrets: None,
+            security: None,
+            logging: None,
         }),
     );
 
@@ -68,6 +76,7 @@ fn sample_manifest(wasm_path: std::path::PathBuf) -> Manifest {
         services,
         networks,
         volumes,
+        logging: None,
     }
 }
 
@@ -182,6 +191,10 @@ async fn test_lifecycle_manager_creation() {
             depends_on: vec![],
             resources: None,
             restart_policy: Default::default(),
+            env_file: None,
+            secrets: None,
+            security: None,
+            logging: None,
         }),
     );
     services.insert(
@@ -197,6 +210,10 @@ async fn test_lifecycle_manager_creation() {
             expected_signature: None,
             trusted_public_key: None,
             restart_policy: Default::default(),
+            env_file: None,
+            secrets: None,
+            security: None,
+            logging: None,
         }),
     );
     let manifest = Manifest {
@@ -205,6 +222,7 @@ async fn test_lifecycle_manager_creation() {
         services,
         networks: HashMap::new(),
         volumes: HashMap::new(),
+        logging: None,
     };
     let mut lm = LifecycleManager::new(&manifest);
     assert_eq!(lm.get_service_status("api").map(|s| &s.name), None);
