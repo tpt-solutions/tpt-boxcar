@@ -146,17 +146,13 @@ impl AiOrchestrator {
                     match provider.complete(prompt).await {
                         Ok(text) => return Ok(text),
                         Err(e) => {
-                            warn!(
-                                "provider '{}' failed: {e}",
-                                provider.name()
-                            );
+                            warn!("provider '{}' failed: {e}", provider.name());
                             last_err = Some(e);
                         }
                     }
                 }
-                Err(last_err.unwrap_or_else(|| {
-                    LlmError::Unavailable("no providers configured".into())
-                }))
+                Err(last_err
+                    .unwrap_or_else(|| LlmError::Unavailable("no providers configured".into())))
             })
             .await?;
 
@@ -186,11 +182,12 @@ impl AiOrchestrator {
         );
 
         let prompt = PromptLibrary::fill_template(&template, &vars);
-        let response = self.call_llm(&prompt).await.map_err(|e| {
-            anyhow::anyhow!("LLM call failed: {e}")
-        })?;
-        let plan: DistillationPlan = serde_json::from_str(&response)
-            .context("failed to parse distillation plan")?;
+        let response = self
+            .call_llm(&prompt)
+            .await
+            .map_err(|e| anyhow::anyhow!("LLM call failed: {e}"))?;
+        let plan: DistillationPlan =
+            serde_json::from_str(&response).context("failed to parse distillation plan")?;
         Ok(plan)
     }
 
@@ -223,11 +220,12 @@ impl AiOrchestrator {
         );
 
         let prompt = PromptLibrary::fill_template(&template, &vars);
-        let response = self.call_llm(&prompt).await.map_err(|e| {
-            anyhow::anyhow!("LLM call failed: {e}")
-        })?;
-        let plan: MigrationPlan = serde_json::from_str(&response)
-            .context("failed to parse migration plan")?;
+        let response = self
+            .call_llm(&prompt)
+            .await
+            .map_err(|e| anyhow::anyhow!("LLM call failed: {e}"))?;
+        let plan: MigrationPlan =
+            serde_json::from_str(&response).context("failed to parse migration plan")?;
         Ok(plan)
     }
 
@@ -256,11 +254,12 @@ impl AiOrchestrator {
         vars.insert("high".to_string(), distilled.cve_scan.high.to_string());
 
         let prompt = PromptLibrary::fill_template(&template, &vars);
-        let response = self.call_llm(&prompt).await.map_err(|e| {
-            anyhow::anyhow!("LLM call failed: {e}")
-        })?;
-        let audit: SecurityAudit = serde_json::from_str(&response)
-            .context("failed to parse security audit")?;
+        let response = self
+            .call_llm(&prompt)
+            .await
+            .map_err(|e| anyhow::anyhow!("LLM call failed: {e}"))?;
+        let audit: SecurityAudit =
+            serde_json::from_str(&response).context("failed to parse security audit")?;
         Ok(audit)
     }
 }

@@ -1,7 +1,7 @@
 pub mod listener;
-pub mod router;
-pub mod upstream;
+pub mod loadbalancer;
 pub mod plugin;
 pub mod plugins;
+pub mod router;
 pub mod tls;
-pub mod loadbalancer;
+pub mod upstream;

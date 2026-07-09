@@ -27,7 +27,9 @@ use anyhow::{Context, Result};
 use containerd_client::services::v1::containers_client::ContainersClient;
 use containerd_client::services::v1::tasks_client::TasksClient;
 use containerd_client::services::v1::version_client::VersionClient;
-use containerd_client::services::v1::{DeleteContainerRequest, DeleteTaskRequest, KillRequest, ListTasksRequest, WaitRequest};
+use containerd_client::services::v1::{
+    DeleteContainerRequest, DeleteTaskRequest, KillRequest, ListTasksRequest, WaitRequest,
+};
 use containerd_client::with_namespace;
 use tonic::transport::Channel;
 use tonic::Request;
@@ -85,23 +87,43 @@ mod normalize_image_ref_tests {
 
     #[test]
     fn bare_name_and_tag_gets_docker_hub_library_prefix() {
-        assert_eq!(normalize_image_ref("node:20-alpine"), "docker.io/library/node:20-alpine");
+        assert_eq!(
+            normalize_image_ref("node:20-alpine"),
+            "docker.io/library/node:20-alpine"
+        );
         assert_eq!(normalize_image_ref("alpine"), "docker.io/library/alpine");
     }
 
     #[test]
     fn org_slash_repo_gets_docker_hub_prefix_only() {
-        assert_eq!(normalize_image_ref("myorg/myimage:tag"), "docker.io/myorg/myimage:tag");
+        assert_eq!(
+            normalize_image_ref("myorg/myimage:tag"),
+            "docker.io/myorg/myimage:tag"
+        );
     }
 
     #[test]
     fn already_qualified_refs_are_left_alone() {
-        assert_eq!(normalize_image_ref("docker.io/library/alpine:3.19"), "docker.io/library/alpine:3.19");
-        assert_eq!(normalize_image_ref("ghcr.io/foo/bar:tag"), "ghcr.io/foo/bar:tag");
-        assert_eq!(normalize_image_ref("localhost:5000/foo"), "localhost:5000/foo");
-        assert_eq!(normalize_image_ref("myregistry.internal:5000/foo:tag"), "myregistry.internal:5000/foo:tag");
+        assert_eq!(
+            normalize_image_ref("docker.io/library/alpine:3.19"),
+            "docker.io/library/alpine:3.19"
+        );
+        assert_eq!(
+            normalize_image_ref("ghcr.io/foo/bar:tag"),
+            "ghcr.io/foo/bar:tag"
+        );
+        assert_eq!(
+            normalize_image_ref("localhost:5000/foo"),
+            "localhost:5000/foo"
+        );
+        assert_eq!(
+            normalize_image_ref("myregistry.internal:5000/foo:tag"),
+            "myregistry.internal:5000/foo:tag"
+        );
     }
 }
+
+use crate::manifest::SecurityConfig;
 
 /// What `RuntimeManager::start_oci` needs to create and run a container,
 /// mapped from `manifest::OCIService`.
@@ -118,6 +140,8 @@ pub struct ContainerSpec {
     pub cpu_limit: Option<f64>,
     /// Bind mounts, from `OCIService.volumes`.
     pub mounts: Vec<MountSpec>,
+    /// Security hardening configuration.
+    pub security: Option<SecurityConfig>,
 }
 
 /// Directory containerd writes captured task stdout/stderr into (one file
@@ -125,7 +149,9 @@ pub struct ContainerSpec {
 /// read instead of the "OCI services aren't captured yet" placeholder.
 /// Overridable via `ORIGIN_LOGS_DIR` so tests/CI can point elsewhere.
 pub fn logs_dir() -> PathBuf {
-    PathBuf::from(std::env::var("ORIGIN_LOGS_DIR").unwrap_or_else(|_| "/var/lib/tpt-boxcar/logs".to_string()))
+    PathBuf::from(
+        std::env::var("ORIGIN_LOGS_DIR").unwrap_or_else(|_| "/var/lib/tpt-boxcar/logs".to_string()),
+    )
 }
 
 /// Path of the captured combined stdout/stderr log for container `id`.
@@ -168,7 +194,11 @@ impl ContainerdClient {
                     socket_path.display()
                 )
             })?;
-        Ok(Self { channel, namespace: NAMESPACE.to_string(), socket_path })
+        Ok(Self {
+            channel,
+            namespace: NAMESPACE.to_string(),
+            socket_path,
+        })
     }
 
     /// Real gRPC round-trip used both to sanity-check connectivity and to
@@ -245,12 +275,21 @@ impl ContainerdClient {
             args.push(cpus.to_string());
         }
         for mount in &spec.mounts {
-            let options = if mount.read_only { "rbind:ro" } else { "rbind:rw" };
+            let options = if mount.read_only {
+                "rbind:ro"
+            } else {
+                "rbind:rw"
+            };
             args.push("--mount".to_string());
             args.push(format!(
                 "type=bind,src={},dst={},options={options}",
                 mount.host_source, mount.container_target
             ));
+        }
+
+        // Security: capabilities and privilege restrictions
+        if let Some(security) = &spec.security {
+            args.extend(crate::security::security_to_ctr_args(security));
         }
 
         // `--log-uri file://...` tells containerd's runtime shim to write
@@ -293,7 +332,12 @@ impl ContainerdClient {
     /// proxy for "is the task's top-level process still alive". A `timeout`
     /// causes this to return `Ok(false)` (unhealthy) rather than hanging
     /// forever on a wedged probe command.
-    pub async fn exec_healthcheck(&self, id: &str, command: &[String], timeout: std::time::Duration) -> Result<bool> {
+    pub async fn exec_healthcheck(
+        &self,
+        id: &str,
+        command: &[String],
+        timeout: std::time::Duration,
+    ) -> Result<bool> {
         anyhow::ensure!(!command.is_empty(), "healthcheck command must not be empty");
 
         let exec_id = format!("healthcheck-{}", next_exec_id());
@@ -322,10 +366,20 @@ impl ContainerdClient {
     /// used both right after `run_container` and for later status checks.
     pub async fn task_pid(&self, id: &str) -> Result<Option<u32>> {
         let mut client = TasksClient::new(self.channel.clone());
-        let req = ListTasksRequest { filter: format!("id=={id}") };
+        let req = ListTasksRequest {
+            filter: format!("id=={id}"),
+        };
         let req = with_namespace!(req, self.namespace);
-        let resp = client.list(req).await.context("containerd ListTasks RPC failed")?;
-        Ok(resp.into_inner().tasks.into_iter().find(|t| t.id == id).map(|t| t.pid))
+        let resp = client
+            .list(req)
+            .await
+            .context("containerd ListTasks RPC failed")?;
+        Ok(resp
+            .into_inner()
+            .tasks
+            .into_iter()
+            .find(|t| t.id == id)
+            .map(|t| t.pid))
     }
 
     /// Stops and tears down a container: sends SIGTERM to its task, deletes
@@ -343,12 +397,18 @@ impl ContainerdClient {
         // to take longer than a couple of seconds). Mirror what real
         // container runtimes do: SIGTERM + wait for a grace period, then
         // escalate to SIGKILL + wait again, before giving up.
-        if !self.signal_and_wait(&mut tasks, id, SIGTERM, std::time::Duration::from_secs(10)).await? {
+        if !self
+            .signal_and_wait(&mut tasks, id, SIGTERM, std::time::Duration::from_secs(10))
+            .await?
+        {
             tracing::warn!("task '{id}' still running 10s after SIGTERM, escalating to SIGKILL");
-            self.signal_and_wait(&mut tasks, id, SIGKILL, std::time::Duration::from_secs(10)).await?;
+            self.signal_and_wait(&mut tasks, id, SIGKILL, std::time::Duration::from_secs(10))
+                .await?;
         }
 
-        let delete_task_req = DeleteTaskRequest { container_id: id.to_string() };
+        let delete_task_req = DeleteTaskRequest {
+            container_id: id.to_string(),
+        };
         let delete_task_req = with_namespace!(delete_task_req, self.namespace);
         if let Err(status) = tasks.delete(delete_task_req).await {
             if status.code() != tonic::Code::NotFound {
@@ -390,15 +450,23 @@ impl ContainerdClient {
         match tasks.kill(kill_req).await {
             Ok(_) => {}
             Err(status) if status.code() == tonic::Code::NotFound => return Ok(true),
-            Err(status) => return Err(status).context(format!("failed to send signal {signal} to task '{id}'")),
+            Err(status) => {
+                return Err(status)
+                    .context(format!("failed to send signal {signal} to task '{id}'"))
+            }
         }
 
-        let wait_req = WaitRequest { container_id: id.to_string(), exec_id: String::new() };
+        let wait_req = WaitRequest {
+            container_id: id.to_string(),
+            exec_id: String::new(),
+        };
         let wait_req = with_namespace!(wait_req, self.namespace);
         match tokio::time::timeout(timeout, tasks.wait(wait_req)).await {
             Ok(Ok(_)) => Ok(true),
             Ok(Err(status)) if status.code() == tonic::Code::NotFound => Ok(true),
-            Ok(Err(status)) => Err(status).context(format!("failed waiting for task '{id}' to exit")),
+            Ok(Err(status)) => {
+                Err(status).context(format!("failed waiting for task '{id}' to exit"))
+            }
             Err(_) => Ok(false), // timed out, still running
         }
     }
@@ -418,15 +486,21 @@ mod tests {
     #[tokio::test]
     #[ignore]
     async fn containerd_pulls_and_runs_a_real_container() {
-        let client = ContainerdClient::connect()
-            .await
-            .expect("failed to connect to containerd — is it running at /run/containerd/containerd.sock?");
+        let client = ContainerdClient::connect().await.expect(
+            "failed to connect to containerd — is it running at /run/containerd/containerd.sock?",
+        );
 
-        let version = client.version().await.expect("Version RPC should succeed against a real daemon");
+        let version = client
+            .version()
+            .await
+            .expect("Version RPC should succeed against a real daemon");
         assert!(!version.is_empty());
 
         let image = "docker.io/library/alpine:3.19";
-        client.pull_image(image).await.expect("should really pull alpine:3.19 from docker.io");
+        client
+            .pull_image(image)
+            .await
+            .expect("should really pull alpine:3.19 from docker.io");
 
         let container_id = format!("tpt-boxcar-test-{}", std::process::id());
         let spec = ContainerSpec {
@@ -442,7 +516,10 @@ mod tests {
             .run_container(&container_id, &spec)
             .await
             .expect("should really create and start the container's task");
-        assert!(pid > 0, "containerd should assign a real nonzero OS pid, got {pid}");
+        assert!(
+            pid > 0,
+            "containerd should assign a real nonzero OS pid, got {pid}"
+        );
 
         // Confirm it's independently visible via a fresh gRPC lookup too.
         let looked_up_pid = client.task_pid(&container_id).await.unwrap();
@@ -471,12 +548,15 @@ mod tests {
     #[tokio::test]
     #[ignore]
     async fn cgroup_memory_limit_actually_oom_kills_the_task() {
-        let client = ContainerdClient::connect()
-            .await
-            .expect("failed to connect to containerd — is it running at /run/containerd/containerd.sock?");
+        let client = ContainerdClient::connect().await.expect(
+            "failed to connect to containerd — is it running at /run/containerd/containerd.sock?",
+        );
 
         let image = "docker.io/library/alpine:3.19";
-        client.pull_image(image).await.expect("should really pull alpine:3.19 from docker.io");
+        client
+            .pull_image(image)
+            .await
+            .expect("should really pull alpine:3.19 from docker.io");
 
         let container_id = format!("tpt-boxcar-oom-test-{}", std::process::id());
         let spec = ContainerSpec {
@@ -501,13 +581,17 @@ mod tests {
             .expect("should really create and start the container's task");
 
         let mut tasks = TasksClient::new(client.channel.clone());
-        let wait_req = WaitRequest { container_id: container_id.clone(), exec_id: String::new() };
+        let wait_req = WaitRequest {
+            container_id: container_id.clone(),
+            exec_id: String::new(),
+        };
         let wait_req = with_namespace!(wait_req, client.namespace);
-        let wait_resp = tokio::time::timeout(std::time::Duration::from_secs(30), tasks.wait(wait_req))
-            .await
-            .expect("task should exit well within 30s once the kernel OOM-kills it")
-            .expect("Tasks.Wait RPC should succeed")
-            .into_inner();
+        let wait_resp =
+            tokio::time::timeout(std::time::Duration::from_secs(30), tasks.wait(wait_req))
+                .await
+                .expect("task should exit well within 30s once the kernel OOM-kills it")
+                .expect("Tasks.Wait RPC should succeed")
+                .into_inner();
 
         // A cgroup OOM-kill delivers SIGKILL to the task; containerd
         // reports that as exit_status 137 (128 + SIGKILL). Anything else

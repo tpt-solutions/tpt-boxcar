@@ -5,40 +5,15 @@ use tpt_scope_agent::probes::{WasmInvocationEvent, WasmProbe};
 use wasmtime_wasi::preview1::WasiP1Ctx;
 use wasmtime_wasi::WasiCtxBuilder;
 
-use crate::manifest::{Manifest, OCIService, ProcessService, RestartPolicy, Service, WasmService};
+use crate::envfile;
+use crate::manifest::{Manifest, OCIService, ProcessService, RestartPolicy, SecretMount, Service, WasmService};
+use crate::security;
 
 #[cfg(all(target_os = "linux", feature = "containerd"))]
 use crate::containerd::{ContainerSpec, ContainerdClient};
 
 #[cfg(unix)]
 use std::os::unix::process::CommandExt;
-
-/// Parses a docker-style memory limit string (`"512m"`, `"1g"`, `"128Mi"`,
-/// a bare byte count) into a byte count for `ContainerSpec.memory_limit_bytes`.
-/// Returns `None` (rather than a default) on anything it can't parse, so
-/// callers can decide whether to warn instead of silently guessing.
-#[cfg(all(target_os = "linux", feature = "containerd"))]
-fn parse_memory_limit(value: &str) -> Option<u64> {
-    let value = value.trim();
-    let (number_part, multiplier) = if let Some(n) = value.strip_suffix("Gi").or_else(|| value.strip_suffix("gi")) {
-        (n, 1024 * 1024 * 1024)
-    } else if let Some(n) = value.strip_suffix("Mi").or_else(|| value.strip_suffix("mi")) {
-        (n, 1024 * 1024)
-    } else if let Some(n) = value.strip_suffix("Ki").or_else(|| value.strip_suffix("ki")) {
-        (n, 1024)
-    } else if let Some(n) = value.strip_suffix('g').or_else(|| value.strip_suffix('G')) {
-        (n, 1024 * 1024 * 1024)
-    } else if let Some(n) = value.strip_suffix('m').or_else(|| value.strip_suffix('M')) {
-        (n, 1024 * 1024)
-    } else if let Some(n) = value.strip_suffix('k').or_else(|| value.strip_suffix('K')) {
-        (n, 1024)
-    } else if let Some(n) = value.strip_suffix('b').or_else(|| value.strip_suffix('B')) {
-        (n, 1)
-    } else {
-        (value, 1)
-    };
-    number_part.trim().parse::<u64>().ok().map(|n| n * multiplier)
-}
 
 /// Resolves an `OCIService.volumes[].source` to a real host path for a bind
 /// mount. A path-shaped value (starts with `/`, `.`, or `~`) is used as-is;
@@ -51,10 +26,15 @@ fn resolve_volume_source(source: &str) -> Result<String> {
     if source.starts_with('/') || source.starts_with('.') || source.starts_with('~') {
         return Ok(source.to_string());
     }
-    let base = std::env::var("ORIGIN_VOLUMES_DIR").unwrap_or_else(|_| "/var/lib/tpt-boxcar/volumes".to_string());
+    let base = std::env::var("ORIGIN_VOLUMES_DIR")
+        .unwrap_or_else(|_| "/var/lib/tpt-boxcar/volumes".to_string());
     let path = std::path::PathBuf::from(&base).join(source);
-    std::fs::create_dir_all(&path)
-        .with_context(|| format!("failed to create managed volume directory {}", path.display()))?;
+    std::fs::create_dir_all(&path).with_context(|| {
+        format!(
+            "failed to create managed volume directory {}",
+            path.display()
+        )
+    })?;
     Ok(path.to_string_lossy().to_string())
 }
 
@@ -85,17 +65,26 @@ pub struct RunningService {
     /// `stop_service` knows which containerd container/task to tear down.
     /// Only read on Linux+`containerd` builds; other targets can't run OCI
     /// services at all (see `start_oci`'s non-Linux stub).
-    #[cfg_attr(not(all(target_os = "linux", feature = "containerd")), allow(dead_code))]
+    #[cfg_attr(
+        not(all(target_os = "linux", feature = "containerd")),
+        allow(dead_code)
+    )]
     containerd_container_id: Option<String>,
     /// Consecutive failed `healthcheck` probes, reset to 0 on any success.
     /// Compared against `HealthCheck.retries` to decide when to actually
     /// mark the service `Failed` rather than transiently `HealthChecking`.
-    #[cfg_attr(not(all(target_os = "linux", feature = "containerd")), allow(dead_code))]
+    #[cfg_attr(
+        not(all(target_os = "linux", feature = "containerd")),
+        allow(dead_code)
+    )]
     health_failures: u32,
     /// When `poll_healthchecks` last actually ran a probe for this service,
     /// so calls more frequent than `HealthCheck.interval_secs` are no-ops
     /// rather than hammering the container with exec probes.
-    #[cfg_attr(not(all(target_os = "linux", feature = "containerd")), allow(dead_code))]
+    #[cfg_attr(
+        not(all(target_os = "linux", feature = "containerd")),
+        allow(dead_code)
+    )]
     last_health_check: Option<std::time::Instant>,
 }
 
@@ -169,7 +158,10 @@ pub fn instantiate_and_run(
     let mut store = wasmtime::Store::new(&engine, OriginWasiState { wasi, limiter });
     if memory_limit_bytes.is_some() {
         store.limiter(|state| {
-            state.limiter.as_mut().expect("limiter set when memory_limit_bytes is Some")
+            state
+                .limiter
+                .as_mut()
+                .expect("limiter set when memory_limit_bytes is Some")
         });
     }
     let mut linker: wasmtime::Linker<OriginWasiState> = wasmtime::Linker::new(&engine);
@@ -269,7 +261,21 @@ impl RuntimeManager {
 
     pub async fn start_service(&mut self, name: &str, service: &Service) -> Result<()> {
         tracing::info!("Starting service: {name}");
-        match service {
+
+        // Load env_file variables into the service's environment before
+        // dispatching to the specific runtime. Explicit `environment:`
+        // values take precedence over env_file values.
+        let mut service = service.clone();
+        if let Some(env_files) = service.env_file() {
+            let file_vars = envfile::load_env_files(env_files)?;
+            let env = service.environment_mut();
+            // env_file vars are underlay; explicit env overrides them
+            for (k, v) in file_vars {
+                env.entry(k).or_insert(v);
+            }
+        }
+
+        match &service {
             Service::OCI(oci) => self.start_oci(name, oci).await,
             Service::Wasm(wasm) => self.start_wasm(name, wasm).await,
             Service::Process(process) => self.start_process(name, process).await,
@@ -293,16 +299,18 @@ impl RuntimeManager {
         }
         let client = self.containerd.as_ref().expect("just connected above");
 
-        client
-            .pull_image(&service.image)
-            .await
-            .with_context(|| format!("failed to pull image '{}' for service '{name}'", service.image))?;
+        client.pull_image(&service.image).await.with_context(|| {
+            format!(
+                "failed to pull image '{}' for service '{name}'",
+                service.image
+            )
+        })?;
 
         let memory_limit_bytes = service
             .resources
             .as_ref()
             .and_then(|r| r.memory.as_deref())
-            .and_then(parse_memory_limit);
+            .and_then(crate::reslimit::parse_memory_limit);
         let cpu_limit = service
             .resources
             .as_ref()
@@ -319,6 +327,21 @@ impl RuntimeManager {
             });
         }
 
+        // Mount secrets as read-only bind mounts
+        if let Some(secrets) = &service.secrets {
+            for secret in secrets {
+                let source = envfile::resolve_secret_source(
+                    &secret.source,
+                    std::path::Path::new("."),
+                )?;
+                mounts.push(crate::containerd::MountSpec {
+                    host_source: source.to_string_lossy().to_string(),
+                    container_target: secret.target.clone(),
+                    read_only: true,
+                });
+            }
+        }
+
         let spec = ContainerSpec {
             image_ref: service.image.clone(),
             command: service.command.clone(),
@@ -326,6 +349,7 @@ impl RuntimeManager {
             memory_limit_bytes,
             cpu_limit,
             mounts,
+            security: service.security.clone(),
         };
 
         let pid = client
@@ -400,6 +424,31 @@ impl RuntimeManager {
         // without requiring a manifest change.
         env.insert("TETHER_CALLER_ID".to_string(), name.to_string());
 
+        // Secrets: for wasm services, read each secret file and expose
+        // its contents as an environment variable.
+        if let Some(secrets) = &service.secrets {
+            for secret in secrets {
+                let source = envfile::resolve_secret_source(
+                    &secret.source,
+                    std::path::Path::new("."),
+                )?;
+                match envfile::read_secret(&source) {
+                    Ok(bytes) => {
+                        let value = String::from_utf8_lossy(&bytes).to_string();
+                        let env_key = secret.name.to_uppercase().replace('-', "_");
+                        env.insert(env_key, value);
+                    }
+                    Err(e) => {
+                        tracing::warn!(
+                            "failed to read secret '{}' from {}: {e:#}",
+                            secret.name,
+                            source.display()
+                        );
+                    }
+                }
+            }
+        }
+
         if let Some(probe) = self.scope_probe.as_mut() {
             let timestamp_ns = std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
@@ -464,24 +513,77 @@ impl RuntimeManager {
             cmd.current_dir(dir);
         }
 
+        // Secrets: for process services, read each secret file and expose
+        // its contents as an environment variable with the secret's name
+        // (uppercase). This lets process services access secrets without
+        // file-based mounts (they share the host filesystem anyway).
+        if let Some(secrets) = &service.secrets {
+            for secret in secrets {
+                let source = envfile::resolve_secret_source(
+                    &secret.source,
+                    std::path::Path::new("."),
+                )?;
+                match envfile::read_secret(&source) {
+                    Ok(bytes) => {
+                        let value = String::from_utf8_lossy(&bytes).to_string();
+                        let env_key = secret.name.to_uppercase().replace('-', "_");
+                        cmd.env(&env_key, &value);
+                        // Also mount the secret file as a readable path
+                        // (process services can read the host filesystem)
+                        tracing::debug!(
+                            "injected secret '{}' as env var {} from {}",
+                            secret.name,
+                            env_key,
+                            source.display()
+                        );
+                    }
+                    Err(e) => {
+                        tracing::warn!(
+                            "failed to read secret '{}' from {}: {e:#}",
+                            secret.name,
+                            source.display()
+                        );
+                    }
+                }
+            }
+        }
+
         // `RLIMIT_CPU` is cumulative CPU-seconds consumed before a kill signal,
         // not a fractional-core throttle — there's no rlimit that expresses
         // "1.5 cores", so a `resources.cpu` limit can't be honored here (a
         // real throttle needs cgroup v2, which requires root). Only memory is
         // applied via `RLIMIT_AS`.
         #[cfg(unix)]
-        if let Some(resources) = &service.resources {
-            let (memory_bytes, cpu_cores) = crate::reslimit::parse_resource_limits(resources);
-            if cpu_cores.is_some() {
-                tracing::warn!(
-                    "service '{name}' requests a CPU limit, but process services can only \
-                     enforce memory limits (via RLIMIT_AS) without root/cgroups; ignoring cpu limit"
-                );
-            }
-            if memory_bytes.is_some() {
+        {
+            let security_config = service.security.clone().unwrap_or_default();
+            let has_security = security_config.no_new_privileges
+                || !security_config.cap_drop.is_empty()
+                || !security_config.cap_add.is_empty();
+
+            let apply_rlimits_and_security = move || {
+                if let Some(resources) = &service.resources {
+                    let (memory_bytes, cpu_cores) =
+                        crate::reslimit::parse_resource_limits(resources);
+                    if cpu_cores.is_some() {
+                        tracing::warn!(
+                            "service '{name}' requests a CPU limit, but process services can only \
+                             enforce memory limits (via RLIMIT_AS) without root/cgroups; ignoring cpu limit"
+                        );
+                    }
+                    if memory_bytes.is_some() {
+                        crate::reslimit::apply_rlimits(memory_bytes, None);
+                    }
+                }
+                if has_security {
+                    security::apply_security_pre_exec(&security_config);
+                }
+            };
+
+            // Only install pre_exec hook if we have something to apply
+            if service.resources.is_some() || has_security {
                 unsafe {
                     cmd.pre_exec(move || {
-                        crate::reslimit::apply_rlimits(memory_bytes, None);
+                        apply_rlimits_and_security();
                         Ok(())
                     });
                 }
@@ -565,7 +667,9 @@ impl RuntimeManager {
             let exit = self.check_exited(&name).await;
             let Some(succeeded) = exit else { continue };
 
-            let Some(service) = manifest.services.get(&name) else { continue };
+            let Some(service) = manifest.services.get(&name) else {
+                continue;
+            };
             let policy = service.restart_policy();
             let should_restart = match policy {
                 RestartPolicy::Never => false,
@@ -576,12 +680,18 @@ impl RuntimeManager {
             if let Some(svc) = self.services.get_mut(&name) {
                 svc.status = ServiceStatus::Failed(format!(
                     "exited {}",
-                    if succeeded { "successfully" } else { "with failure" }
+                    if succeeded {
+                        "successfully"
+                    } else {
+                        "with failure"
+                    }
                 ));
             }
 
             if should_restart {
-                tracing::info!("service '{name}' exited unexpectedly, restarting (policy: {policy:?})");
+                tracing::info!(
+                    "service '{name}' exited unexpectedly, restarting (policy: {policy:?})"
+                );
                 self.services.remove(&name);
                 self.start_service(&name, service).await?;
                 restarted.push(name);
@@ -598,14 +708,17 @@ impl RuntimeManager {
         // containerd task liveness must be checked before taking a mutable
         // borrow of `self.services` below, since both live on `self`.
         #[cfg(all(target_os = "linux", feature = "containerd"))]
-        let containerd_container_id = self.services.get(name).and_then(|s| s.containerd_container_id.clone());
+        let containerd_container_id = self
+            .services
+            .get(name)
+            .and_then(|s| s.containerd_container_id.clone());
         #[cfg(all(target_os = "linux", feature = "containerd"))]
         let containerd_exited = if let Some(container_id) = containerd_container_id {
             match self.containerd.as_ref() {
                 Some(client) => match client.task_pid(&container_id).await {
                     Ok(None) => Some(true), // gone; treat as a clean exit (real exit code isn't surfaced by task_pid)
                     Ok(Some(_)) => None,    // still running
-                    Err(_) => None,         // can't determine right now; don't false-positive a restart
+                    Err(_) => None, // can't determine right now; don't false-positive a restart
                 },
                 None => None,
             }
@@ -638,31 +751,44 @@ impl RuntimeManager {
     /// because of a healthcheck (as opposed to a process/task exit, which
     /// `reap_and_restart` handles separately).
     pub async fn poll_healthchecks(&mut self, manifest: &Manifest) -> Result<Vec<String>> {
-        #[cfg_attr(not(all(target_os = "linux", feature = "containerd")), allow(unused_mut))]
+        #[cfg_attr(
+            not(all(target_os = "linux", feature = "containerd")),
+            allow(unused_mut)
+        )]
         let mut newly_failed = Vec::new();
 
         #[cfg(all(target_os = "linux", feature = "containerd"))]
         {
             let names: Vec<String> = self.services.keys().cloned().collect();
             for name in names {
-                let Some(Service::OCI(oci)) = manifest.services.get(&name) else { continue };
-                let Some(healthcheck) = &oci.healthcheck else { continue };
+                let Some(Service::OCI(oci)) = manifest.services.get(&name) else {
+                    continue;
+                };
+                let Some(healthcheck) = &oci.healthcheck else {
+                    continue;
+                };
 
                 let due = self.services.get(&name).is_some_and(|svc| {
                     svc.last_health_check
-                        .map(|t| t.elapsed() >= std::time::Duration::from_secs(healthcheck.interval_secs))
+                        .map(|t| {
+                            t.elapsed() >= std::time::Duration::from_secs(healthcheck.interval_secs)
+                        })
                         .unwrap_or(true)
                 });
                 if !due {
                     continue;
                 }
 
-                let Some(container_id) =
-                    self.services.get(&name).and_then(|s| s.containerd_container_id.clone())
+                let Some(container_id) = self
+                    .services
+                    .get(&name)
+                    .and_then(|s| s.containerd_container_id.clone())
                 else {
                     continue;
                 };
-                let Some(client) = self.containerd.as_ref() else { continue };
+                let Some(client) = self.containerd.as_ref() else {
+                    continue;
+                };
 
                 let healthy = client
                     .exec_healthcheck(
@@ -747,6 +873,9 @@ mod tests {
             expected_signature: None,
             trusted_public_key: None,
             restart_policy: Default::default(),
+            env_file: None,
+            secrets: None,
+            security: None,
         }
     }
 
@@ -835,7 +964,10 @@ mod tests {
             .start_service("tampered", &Service::Wasm(service))
             .await;
 
-        assert!(result.is_err(), "tampered wasm bytes must fail verification");
+        assert!(
+            result.is_err(),
+            "tampered wasm bytes must fail verification"
+        );
     }
 
     #[tokio::test]
@@ -858,10 +990,7 @@ mod tests {
         assert_eq!(event.function, "_start");
         assert_eq!(event.args, vec!["--port".to_string(), "8080".to_string()]);
         assert_eq!(event.wasm_sha256, sha256_hex(&wasm_bytes));
-        assert_eq!(
-            event.env.get("TETHER_CALLER_ID"),
-            Some(&"api".to_string())
-        );
+        assert_eq!(event.env.get("TETHER_CALLER_ID"), Some(&"api".to_string()));
 
         // Draining clears the buffer.
         assert!(manager.take_captured_invocations().is_empty());
@@ -912,7 +1041,12 @@ mod tests {
         // test's own wait below, so `reap_and_restart` has something real
         // to detect.
         if cfg!(windows) {
-            vec!["ping".to_string(), "-n".to_string(), "2".to_string(), "127.0.0.1".to_string()]
+            vec![
+                "ping".to_string(),
+                "-n".to_string(),
+                "2".to_string(),
+                "127.0.0.1".to_string(),
+            ]
         } else {
             vec!["sh".to_string(), "-c".to_string(), "sleep 0.3".to_string()]
         }
@@ -927,6 +1061,7 @@ mod tests {
             environment: HashMap::new(),
             working_dir: None,
             depends_on: vec![],
+            resources: None,
             restart_policy: crate::manifest::RestartPolicy::Always,
         });
         let mut services = HashMap::new();
@@ -939,20 +1074,36 @@ mod tests {
             volumes: HashMap::new(),
         };
 
-        manager.start_service("flaky", &service).await.expect("should start");
+        manager
+            .start_service("flaky", &service)
+            .await
+            .expect("should start");
         let first_pid = manager.list_services().get("flaky").unwrap().pid;
         assert_eq!(manager.get_status("flaky"), Some(&ServiceStatus::Running));
 
         // Let the short-lived command actually exit.
         tokio::time::sleep(std::time::Duration::from_millis(1500)).await;
 
-        let restarted = manager.reap_and_restart(&manifest).await.expect("reap should not error");
+        let restarted = manager
+            .reap_and_restart(&manifest)
+            .await
+            .expect("reap should not error");
         assert_eq!(restarted, vec!["flaky".to_string()]);
-        assert_eq!(manager.get_status("flaky"), Some(&ServiceStatus::Running), "service should be running again after restart");
+        assert_eq!(
+            manager.get_status("flaky"),
+            Some(&ServiceStatus::Running),
+            "service should be running again after restart"
+        );
 
         let second_pid = manager.list_services().get("flaky").unwrap().pid;
-        assert!(second_pid.is_some(), "restarted process should have a real pid");
-        assert_ne!(first_pid, second_pid, "restart should spawn a genuinely new process");
+        assert!(
+            second_pid.is_some(),
+            "restarted process should have a real pid"
+        );
+        assert_ne!(
+            first_pid, second_pid,
+            "restart should spawn a genuinely new process"
+        );
 
         manager.stop_service("flaky").await.ok();
     }
@@ -966,6 +1117,7 @@ mod tests {
             environment: HashMap::new(),
             working_dir: None,
             depends_on: vec![],
+            resources: None,
             restart_policy: crate::manifest::RestartPolicy::Never,
         });
         let mut services = HashMap::new();
@@ -978,13 +1130,25 @@ mod tests {
             volumes: HashMap::new(),
         };
 
-        manager.start_service("one-shot", &service).await.expect("should start");
+        manager
+            .start_service("one-shot", &service)
+            .await
+            .expect("should start");
         tokio::time::sleep(std::time::Duration::from_millis(1500)).await;
 
-        let restarted = manager.reap_and_restart(&manifest).await.expect("reap should not error");
-        assert!(restarted.is_empty(), "restart_policy: never must not be restarted");
+        let restarted = manager
+            .reap_and_restart(&manifest)
+            .await
+            .expect("reap should not error");
         assert!(
-            matches!(manager.get_status("one-shot"), Some(ServiceStatus::Failed(_))),
+            restarted.is_empty(),
+            "restart_policy: never must not be restarted"
+        );
+        assert!(
+            matches!(
+                manager.get_status("one-shot"),
+                Some(ServiceStatus::Failed(_))
+            ),
             "service should be marked Failed, not silently forgotten"
         );
     }

@@ -10,10 +10,7 @@ use tracing::{debug, warn};
 #[serde(tag = "type")]
 pub enum DbCredentials {
     #[serde(rename = "direct")]
-    Direct {
-        username: String,
-        password: String,
-    },
+    Direct { username: String, password: String },
     #[serde(rename = "env")]
     Env {
         username_var: String,

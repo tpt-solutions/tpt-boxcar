@@ -200,19 +200,18 @@ impl MysqlWireDriver {
             }
             0xFE => {
                 let switch_pos = 1;
-                let (new_plugin, name_end) = if let Some(end) =
-                    response[switch_pos..].iter().position(|&b| b == 0)
-                {
-                    (
-                        std::str::from_utf8(&response[switch_pos..switch_pos + end])
-                            .context("invalid auth plugin name")?
-                            .to_string(),
-                        end,
-                    )
-                } else {
-                    warn!("malformed auth switch request from server");
-                    bail!("malformed auth switch request");
-                };
+                let (new_plugin, name_end) =
+                    if let Some(end) = response[switch_pos..].iter().position(|&b| b == 0) {
+                        (
+                            std::str::from_utf8(&response[switch_pos..switch_pos + end])
+                                .context("invalid auth plugin name")?
+                                .to_string(),
+                            end,
+                        )
+                    } else {
+                        warn!("malformed auth switch request from server");
+                        bail!("malformed auth switch request");
+                    };
 
                 debug!(plugin = %new_plugin, "auth switch requested");
 

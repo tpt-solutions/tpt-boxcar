@@ -1,7 +1,7 @@
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
 
-use crate::drivers::{DatabaseConfig, DriverKind, WireDriver, QueryRow};
+use crate::drivers::{DatabaseConfig, DriverKind, QueryRow, WireDriver};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct WitParams {
@@ -72,7 +72,9 @@ impl TetherWit {
         username: &str,
         password: &str,
     ) -> Result<()> {
-        self.inner.connect(host, port, database, username, password).await
+        self.inner
+            .connect(host, port, database, username, password)
+            .await
     }
 
     /// Connect using DatabaseConfig (resolves credentials internally,
@@ -111,7 +113,9 @@ impl TetherWit {
         if self.inner.kind() == DriverKind::Redis {
             Ok(())
         } else {
-            anyhow::bail!("kv operations require a connected key-value driver (use RedisWireDriver)")
+            anyhow::bail!(
+                "kv operations require a connected key-value driver (use RedisWireDriver)"
+            )
         }
     }
 
@@ -121,7 +125,10 @@ impl TetherWit {
             .inner
             .query("GET", &[serde_json::Value::String(key.to_string())])
             .await?;
-        Ok(row.values.first().and_then(|v| v.as_str().map(String::from)))
+        Ok(row
+            .values
+            .first()
+            .and_then(|v| v.as_str().map(String::from)))
     }
 
     pub async fn kv_set(&self, key: &str, value: &str) -> Result<()> {

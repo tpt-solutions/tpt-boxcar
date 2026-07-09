@@ -1,12 +1,17 @@
-pub mod manifest;
-pub mod runtime;
-pub mod network;
-pub mod dns;
-pub mod lifecycle;
-pub mod portmap;
-pub mod reslimit;
+#[cfg(all(target_os = "linux", feature = "containerd"))]
+pub mod build;
 #[cfg(all(target_os = "linux", feature = "containerd"))]
 pub mod containerd;
+pub mod dns;
+pub mod dockerfile;
+pub mod envfile;
+pub mod lifecycle;
+pub mod manifest;
+pub mod network;
+pub mod portmap;
+pub mod reslimit;
+pub mod runtime;
+pub mod security;
 
 use lifecycle::{LifecycleManager, ServiceHealthDto};
 use manifest::Manifest;
@@ -60,7 +65,9 @@ impl Origin {
     }
 
     pub fn status(&self, name: &str) -> Option<ServiceHealthDto> {
-        self.lifecycle.get_service_status(name).map(ServiceHealthDto::from)
+        self.lifecycle
+            .get_service_status(name)
+            .map(ServiceHealthDto::from)
     }
 
     pub fn list(&self) -> Vec<ServiceHealthDto> {

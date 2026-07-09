@@ -115,7 +115,8 @@ impl ConnectionPool {
                 .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
             self.connections.insert(id, Mutex::new(conn));
             let _ = self.idle_connections.send(id).await;
-            self.idle_count.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            self.idle_count
+                .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         }
 
         info!(total = self.connections.len(), "pool initialized");
@@ -170,7 +171,8 @@ impl ConnectionPool {
                     match conn.driver.ping().await {
                         Ok(()) => {
                             conn.last_used = Instant::now();
-                            self.idle_count.fetch_sub(1, std::sync::atomic::Ordering::Relaxed);
+                            self.idle_count
+                                .fetch_sub(1, std::sync::atomic::Ordering::Relaxed);
                             return Ok(PooledConnectionGuard {
                                 id,
                                 pool: self,
@@ -181,13 +183,15 @@ impl ConnectionPool {
                             warn!(id, err = %e, "idle connection failed ping, dropping");
                             drop(conn);
                             self.connections.remove(&id);
-                            self.idle_count.fetch_sub(1, std::sync::atomic::Ordering::Relaxed);
+                            self.idle_count
+                                .fetch_sub(1, std::sync::atomic::Ordering::Relaxed);
                         }
                     }
                 } else {
                     drop(conn);
                     self.connections.remove(&id);
-                    self.idle_count.fetch_sub(1, std::sync::atomic::Ordering::Relaxed);
+                    self.idle_count
+                        .fetch_sub(1, std::sync::atomic::Ordering::Relaxed);
                     debug!(id, "removed stale idle connection");
                 }
             }
@@ -198,7 +202,11 @@ impl ConnectionPool {
             .next_id
             .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         self.connections.insert(id, Mutex::new(conn));
-        debug!(id, caller = caller.unwrap_or("<none>"), "created new connection");
+        debug!(
+            id,
+            caller = caller.unwrap_or("<none>"),
+            "created new connection"
+        );
 
         Ok(PooledConnectionGuard {
             id,
@@ -210,7 +218,8 @@ impl ConnectionPool {
     pub fn return_connection(&self, id: u64) {
         if self.connections.contains_key(&id) {
             let _ = self.idle_connections.try_send(id);
-            self.idle_count.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            self.idle_count
+                .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         }
     }
 
@@ -228,7 +237,8 @@ impl ConnectionPool {
             "shutting down connection pool"
         );
         self.connections.clear();
-        self.idle_count.store(0, std::sync::atomic::Ordering::Relaxed);
+        self.idle_count
+            .store(0, std::sync::atomic::Ordering::Relaxed);
     }
 }
 

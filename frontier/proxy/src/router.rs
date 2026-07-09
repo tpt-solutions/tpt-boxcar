@@ -2,9 +2,9 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use anyhow::{Context, Result};
-use hyper::{Request, Response};
-use http_body_util::Full;
 use bytes::Bytes;
+use http_body_util::Full;
+use hyper::{Request, Response};
 use tracing::debug;
 
 use crate::loadbalancer::LoadBalancer;
@@ -40,19 +40,19 @@ impl Router {
         self.upstreams.insert(name, lb);
     }
 
-    pub async fn route(&self, req: Request<hyper::body::Incoming>) -> Result<Response<Full<Bytes>>> {
+    pub async fn route(
+        &self,
+        req: Request<hyper::body::Incoming>,
+    ) -> Result<Response<Full<Bytes>>> {
         let matched = self.find_rule(&req);
         match matched {
             Some(rule) => {
                 debug!("matched rule: upstream={}", rule.upstream);
                 let path = req.uri().path().to_string();
                 let modified_path = if rule.strip_prefix {
-                    rule.path_prefix.as_ref()
-                        .map(|prefix| {
-                            path.strip_prefix(prefix)
-                                .unwrap_or(&path)
-                                .to_string()
-                        })
+                    rule.path_prefix
+                        .as_ref()
+                        .map(|prefix| path.strip_prefix(prefix).unwrap_or(&path).to_string())
                         .unwrap_or(path)
                 } else {
                     path
@@ -64,7 +64,9 @@ impl Router {
                     .context("failed to read request body")?
                     .to_bytes();
 
-                let lb = self.upstreams.get(&rule.upstream)
+                let lb = self
+                    .upstreams
+                    .get(&rule.upstream)
                     .context(format!("upstream not found: {}", rule.upstream))?;
 
                 let endpoint = lb.next_endpoint().context("no available endpoints")?;
@@ -83,10 +85,12 @@ impl Router {
                     .body(Full::new(body_bytes))
                     .context("failed to build upstream request")?;
 
-                let client = hyper_util::client::legacy::Client::builder(TokioExecutor::new())
-                    .build_http();
+                let client =
+                    hyper_util::client::legacy::Client::builder(TokioExecutor::new()).build_http();
 
-                let resp = client.request(upstream_req).await
+                let resp = client
+                    .request(upstream_req)
+                    .await
                     .context("upstream request failed")?;
 
                 let (resp_parts, resp_body) = resp.into_parts();

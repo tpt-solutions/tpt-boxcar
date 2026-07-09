@@ -134,9 +134,7 @@ impl PostgresWireDriver {
 
     /// Read a complete result set after sending a Simple Query or Extended Query.
     /// Returns columns, row data, and the affected-row count parsed from CommandComplete.
-    async fn read_result_set(
-        &self,
-    ) -> Result<(Vec<String>, Vec<Vec<serde_json::Value>>, u64)> {
+    async fn read_result_set(&self) -> Result<(Vec<String>, Vec<Vec<serde_json::Value>>, u64)> {
         let mut columns = Vec::new();
         let mut rows = Vec::new();
         let mut affected: u64 = 0;
@@ -171,7 +169,10 @@ impl PostgresWireDriver {
                     let mut row_values = Vec::with_capacity(field_count);
                     for _ in 0..field_count {
                         let field_len = i32::from_be_bytes([
-                            body[pos], body[pos + 1], body[pos + 2], body[pos + 3],
+                            body[pos],
+                            body[pos + 1],
+                            body[pos + 2],
+                            body[pos + 3],
                         ]);
                         pos += 4;
                         if field_len == -1 {
@@ -496,9 +497,7 @@ impl PostgresWireDriver {
                             let hash2_hex = format!("md5{:x}", hash2);
 
                             let mut pwd_msg = Vec::new();
-                            pwd_msg.extend_from_slice(
-                                &(hash2_hex.len() as u32 + 4).to_be_bytes(),
-                            );
+                            pwd_msg.extend_from_slice(&(hash2_hex.len() as u32 + 4).to_be_bytes());
                             pwd_msg.extend_from_slice(hash2_hex.as_bytes());
                             tcp.write_all(&pwd_msg).await?;
                         }
@@ -518,13 +517,11 @@ impl PostgresWireDriver {
                             let mut payload = Vec::new();
                             payload.extend_from_slice(b"SCRAM-SHA-256");
                             payload.push(0);
-                            payload
-                                .extend_from_slice(&(client_first.len() as u32).to_be_bytes());
+                            payload.extend_from_slice(&(client_first.len() as u32).to_be_bytes());
                             payload.extend_from_slice(client_first.as_bytes());
 
                             let mut sasl_msg = Vec::new();
-                            sasl_msg
-                                .extend_from_slice(&(payload.len() as u32 + 4).to_be_bytes());
+                            sasl_msg.extend_from_slice(&(payload.len() as u32 + 4).to_be_bytes());
                             sasl_msg.extend_from_slice(&payload);
                             tcp.write_all(&sasl_msg).await?;
 
@@ -544,8 +541,7 @@ impl PostgresWireDriver {
                                     b'R' => {
                                         let at = i32::from_be_bytes([mb[0], mb[1], mb[2], mb[3]]);
                                         if at == 11 {
-                                            let server_first =
-                                                std::str::from_utf8(&mb[4..])?;
+                                            let server_first = std::str::from_utf8(&mb[4..])?;
                                             let (server_nonce, salt_b64, iter_count) =
                                                 parse_scram_server_first(server_first)?;
 
@@ -571,14 +567,11 @@ impl PostgresWireDriver {
                                                 server_nonce
                                             );
 
-                                            let client_sig = hmac_sha256(
-                                                &stored_key,
-                                                auth_message.as_bytes(),
-                                            );
+                                            let client_sig =
+                                                hmac_sha256(&stored_key, auth_message.as_bytes());
                                             let mut client_proof = client_key;
-                                            for (a, b) in client_proof
-                                                .iter_mut()
-                                                .zip(client_sig.iter())
+                                            for (a, b) in
+                                                client_proof.iter_mut().zip(client_sig.iter())
                                             {
                                                 *a ^= b;
                                             }
@@ -595,8 +588,7 @@ impl PostgresWireDriver {
 
                                             let mut resp = Vec::new();
                                             resp.extend_from_slice(
-                                                &(client_final.len() as u32 + 4)
-                                                    .to_be_bytes(),
+                                                &(client_final.len() as u32 + 4).to_be_bytes(),
                                             );
                                             resp.extend_from_slice(client_final.as_bytes());
                                             tcp.write_all(&resp).await?;
@@ -604,11 +596,11 @@ impl PostgresWireDriver {
                                             scram_done = true;
                                         }
                                     }
-                                b'E' => {
-                                    let msg = Self::parse_error_message(&mb);
-                                    warn!(msg = %msg, "SCRAM-SHA-256 authentication error");
-                                    bail!("SCRAM error: {}", msg);
-                                }
+                                    b'E' => {
+                                        let msg = Self::parse_error_message(&mb);
+                                        warn!(msg = %msg, "SCRAM-SHA-256 authentication error");
+                                        bail!("SCRAM error: {}", msg);
+                                    }
                                     _ => {}
                                 }
                             }

@@ -9,13 +9,15 @@ use tpt_origin_core::manifest::Manifest;
 fn boxcar_yaml_parses_and_orders_tether_before_origin_before_frontier() {
     let path = concat!(env!("CARGO_MANIFEST_DIR"), "/../../boxcar.yaml");
     let content = std::fs::read_to_string(path).expect("boxcar.yaml should exist at repo root");
-    let manifest: Manifest = serde_yaml::from_str(&content).expect("boxcar.yaml should parse as a valid Manifest");
+    let manifest: Manifest =
+        serde_yaml::from_str(&content).expect("boxcar.yaml should parse as a valid Manifest");
 
     assert!(manifest.services.contains_key("tether-control-plane"));
     assert!(manifest.services.contains_key("origin-workload"));
     assert!(manifest.services.contains_key("frontier-control-plane"));
 
-    let waves = topological_waves(&manifest).expect("boxcar.yaml's depends_on graph should be acyclic");
+    let waves =
+        topological_waves(&manifest).expect("boxcar.yaml's depends_on graph should be acyclic");
 
     let wave_of = |name: &str| {
         waves

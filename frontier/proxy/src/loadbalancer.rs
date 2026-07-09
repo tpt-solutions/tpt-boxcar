@@ -52,7 +52,9 @@ impl LoadBalancer for RoundRobinBalancer {
         }
 
         let unhealthy = self.unhealthy.read();
-        let healthy: Vec<&BackendEndpoint> = self.endpoints.iter()
+        let healthy: Vec<&BackendEndpoint> = self
+            .endpoints
+            .iter()
             .filter(|ep| !unhealthy.contains(&ep.addr.to_string()))
             .collect();
 
@@ -76,7 +78,8 @@ impl LoadBalancer for RoundRobinBalancer {
 
     fn healthy_endpoints(&self) -> Vec<BackendEndpoint> {
         let unhealthy = self.unhealthy.read();
-        self.endpoints.iter()
+        self.endpoints
+            .iter()
             .filter(|ep| !unhealthy.contains(&ep.addr.to_string()))
             .cloned()
             .collect()
@@ -90,9 +93,7 @@ pub struct LeastConnectionsBalancer {
 
 impl LeastConnectionsBalancer {
     pub fn new(endpoints: Vec<BackendEndpoint>) -> Self {
-        let connections = endpoints.iter()
-            .map(|ep| (ep.addr, 0))
-            .collect();
+        let connections = endpoints.iter().map(|ep| (ep.addr, 0)).collect();
         Self {
             endpoints,
             connections: Mutex::new(connections),
@@ -103,7 +104,8 @@ impl LeastConnectionsBalancer {
 impl LoadBalancer for LeastConnectionsBalancer {
     fn next_endpoint(&self) -> Option<BackendEndpoint> {
         let connections = self.connections.lock();
-        self.endpoints.iter()
+        self.endpoints
+            .iter()
             .filter(|ep| connections.get(&ep.addr).copied().unwrap_or(usize::MAX) < 1000)
             .min_by_key(|ep| connections.get(&ep.addr).copied().unwrap_or(0))
             .cloned()
@@ -123,7 +125,8 @@ impl LoadBalancer for LeastConnectionsBalancer {
 
     fn healthy_endpoints(&self) -> Vec<BackendEndpoint> {
         let connections = self.connections.lock();
-        self.endpoints.iter()
+        self.endpoints
+            .iter()
             .filter(|ep| connections.get(&ep.addr).copied().unwrap_or(usize::MAX) < 1000)
             .cloned()
             .collect()
@@ -224,7 +227,8 @@ impl LoadBalancer for ConsistentHashBalancer {
 
     fn healthy_endpoints(&self) -> Vec<BackendEndpoint> {
         let unhealthy = self.unhealthy.read();
-        self.endpoints.iter()
+        self.endpoints
+            .iter()
             .filter(|ep| !unhealthy.contains(&ep.addr.to_string()))
             .cloned()
             .collect()

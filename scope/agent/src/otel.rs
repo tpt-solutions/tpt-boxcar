@@ -65,9 +65,10 @@ pub struct SyscallMetrics {
 
 impl OtelExporter {
     pub fn new(config: &OtelConfig) -> anyhow::Result<Self> {
-        let resource = Resource::new(vec![
-            KeyValue::new("service.name", config.service_name.clone()),
-        ]);
+        let resource = Resource::new(vec![KeyValue::new(
+            "service.name",
+            config.service_name.clone(),
+        )]);
 
         let tracer_provider = opentelemetry_otlp::new_pipeline()
             .tracing()
@@ -130,12 +131,8 @@ impl OtelExporter {
 
     pub fn emit_event(&self, event: &ProbeEvent, enrichment: Option<&EnrichmentData>) {
         match &event.data {
-            EventData::Network(net_event) => {
-                self.emit_network_trace(event, net_event, enrichment)
-            }
-            EventData::Syscall(sys_event) => {
-                self.emit_syscall_trace(event, sys_event, enrichment)
-            }
+            EventData::Network(net_event) => self.emit_network_trace(event, net_event, enrichment),
+            EventData::Syscall(sys_event) => self.emit_syscall_trace(event, sys_event, enrichment),
             EventData::WasmRuntime(wasm_event) => {
                 self.emit_wasm_trace(event, wasm_event, enrichment)
             }
@@ -387,11 +384,7 @@ pub fn build_span_attributes(
     attrs
 }
 
-pub fn build_metric_resource(
-    pod_name: &str,
-    namespace: &str,
-    container_id: &str,
-) -> Resource {
+pub fn build_metric_resource(pod_name: &str, namespace: &str, container_id: &str) -> Resource {
     Resource::new(vec![
         KeyValue::new("k8s.pod.name", pod_name.to_string()),
         KeyValue::new("k8s.namespace", namespace.to_string()),

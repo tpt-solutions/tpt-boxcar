@@ -120,7 +120,9 @@ async fn proxy_connection(mut client: TcpStream, target_addr: &str) -> Result<()
         .await
         .with_context(|| format!("connect to {target_addr} failed"))?;
 
-    tokio::io::copy_bidirectional(&mut client, &mut upstream).await.ok();
+    tokio::io::copy_bidirectional(&mut client, &mut upstream)
+        .await
+        .ok();
     Ok(())
 }
 

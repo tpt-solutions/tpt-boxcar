@@ -1,3 +1,3 @@
-pub mod probes;
-pub mod otel;
 pub mod enrichment;
+pub mod otel;
+pub mod probes;

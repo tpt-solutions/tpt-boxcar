@@ -4,7 +4,7 @@ use std::path::{Path, PathBuf};
 use anyhow::{Context, Result};
 use parking_lot::RwLock;
 use serde::{Deserialize, Serialize};
-use tracing::{info, error};
+use tracing::{error, info};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PluginConfig {
@@ -70,20 +70,20 @@ struct PluginResourceLimiter {
 
 impl PluginResourceLimiter {
     fn new(plugin_name: impl Into<String>, limits: ResourceLimits) -> Self {
-        Self { limits, plugin_name: plugin_name.into() }
+        Self {
+            limits,
+            plugin_name: plugin_name.into(),
+        }
     }
 }
 
 impl wasmtime::ResourceLimiter for PluginResourceLimiter {
-    fn memory_growing(
-        &mut self,
-        _old: usize,
-        new: usize,
-        maximum: Option<usize>,
-    ) -> Result<bool> {
+    fn memory_growing(&mut self, _old: usize, new: usize, maximum: Option<usize>) -> Result<bool> {
         // Honor whichever cap is stricter: the module's own declared max or
         // our configured limit.
-        let cap = maximum.map_or(self.limits.max_memory_bytes, |m| m.min(self.limits.max_memory_bytes));
+        let cap = maximum.map_or(self.limits.max_memory_bytes, |m| {
+            m.min(self.limits.max_memory_bytes)
+        });
         if new > cap {
             error!(
                 "plugin '{}' denied memory growth to {} bytes (cap {} bytes)",
@@ -94,13 +94,10 @@ impl wasmtime::ResourceLimiter for PluginResourceLimiter {
         Ok(true)
     }
 
-    fn table_growing(
-        &mut self,
-        _old: u32,
-        new: u32,
-        maximum: Option<u32>,
-    ) -> Result<bool> {
-        let cap = maximum.map_or(self.limits.max_table_elements, |m| m.min(self.limits.max_table_elements));
+    fn table_growing(&mut self, _old: u32, new: u32, maximum: Option<u32>) -> Result<bool> {
+        let cap = maximum.map_or(self.limits.max_table_elements, |m| {
+            m.min(self.limits.max_table_elements)
+        });
         if new > cap {
             error!(
                 "plugin '{}' denied table growth to {} elements (cap {} elements)",
@@ -131,10 +128,13 @@ impl PluginLoader {
             .consume_fuel(true)
             .epoch_interruption(true);
 
-        let engine = wasmtime::Engine::new(&engine_config)
-            .context("failed to create wasmtime engine")?;
+        let engine =
+            wasmtime::Engine::new(&engine_config).context("failed to create wasmtime engine")?;
 
-        info!("plugin loader initialized, dir={}", plugin_dir.as_ref().display());
+        info!(
+            "plugin loader initialized, dir={}",
+            plugin_dir.as_ref().display()
+        );
 
         Ok(Self {
             engine,
@@ -155,8 +155,14 @@ impl PluginLoader {
             .context(format!("failed to read plugin: {}", config.path.display()))?;
 
         self.register_module(&config.name, &wasm_bytes)?;
-        self.configs.write().insert(config.name.clone(), config.clone());
-        info!("loaded plugin '{}' from {}", config.name, config.path.display());
+        self.configs
+            .write()
+            .insert(config.name.clone(), config.clone());
+        info!(
+            "loaded plugin '{}' from {}",
+            config.name,
+            config.path.display()
+        );
         Ok(())
     }
 
@@ -180,7 +186,11 @@ impl PluginLoader {
 
         let client = Client::new(ClientConfig::default());
         let image_data = client
-            .pull(&reference, &RegistryAuth::Anonymous, vec![WASM_LAYER_MEDIA_TYPE])
+            .pull(
+                &reference,
+                &RegistryAuth::Anonymous,
+                vec![WASM_LAYER_MEDIA_TYPE],
+            )
             .await
             .with_context(|| format!("failed to pull plugin '{name}' from {reference}"))?;
 
@@ -191,15 +201,20 @@ impl PluginLoader {
             .with_context(|| format!("OCI artifact for plugin '{name}' has no layers"))?;
 
         self.register_module(name, &layer.data)?;
-        self.configs.write().insert(name.to_string(), PluginConfig {
-            name: name.to_string(),
-            path: PathBuf::new(),
-            enabled: true,
-            config: HashMap::new(),
-            source: PluginSource::Oci { reference: reference.to_string() },
-            max_memory_bytes: None,
-            max_table_elements: None,
-        });
+        self.configs.write().insert(
+            name.to_string(),
+            PluginConfig {
+                name: name.to_string(),
+                path: PathBuf::new(),
+                enabled: true,
+                config: HashMap::new(),
+                source: PluginSource::Oci {
+                    reference: reference.to_string(),
+                },
+                max_memory_bytes: None,
+                max_table_elements: None,
+            },
+        );
         info!("loaded plugin '{}' from OCI reference {}", name, reference);
         Ok(())
     }
@@ -217,7 +232,8 @@ impl PluginLoader {
 
     pub fn unload_plugin(&self, name: &str) -> Result<()> {
         let mut modules = self.modules.write();
-        modules.remove(name)
+        modules
+            .remove(name)
             .context(format!("plugin '{}' not found", name))?;
         self.configs.write().remove(name);
         info!("unloaded plugin '{}'", name);
@@ -237,8 +253,8 @@ impl PluginLoader {
     pub fn hot_reload(&self) -> Result<Vec<String>> {
         let mut reloaded = Vec::new();
 
-        let entries = std::fs::read_dir(&self.plugin_dir)
-            .context("failed to read plugin directory")?;
+        let entries =
+            std::fs::read_dir(&self.plugin_dir).context("failed to read plugin directory")?;
 
         for entry in entries {
             let entry = entry.context("failed to read dir entry")?;
@@ -248,9 +264,7 @@ impl PluginLoader {
                 continue;
             }
 
-            let modified = entry.metadata()
-                .and_then(|m| m.modified())
-                .ok();
+            let modified = entry.metadata().and_then(|m| m.modified()).ok();
 
             let mut watcher = self.watcher_state.write();
             let last_modified = watcher.get(&path).copied();
@@ -268,7 +282,8 @@ impl PluginLoader {
             drop(watcher);
 
             if should_reload {
-                let name = path.file_stem()
+                let name = path
+                    .file_stem()
                     .and_then(|s| s.to_str())
                     .unwrap_or("unknown")
                     .to_string();
@@ -280,7 +295,10 @@ impl PluginLoader {
                     name: name.clone(),
                     path: path.clone(),
                     enabled: true,
-                    config: previous.as_ref().map(|c| c.config.clone()).unwrap_or_default(),
+                    config: previous
+                        .as_ref()
+                        .map(|c| c.config.clone())
+                        .unwrap_or_default(),
                     source: PluginSource::File,
                     max_memory_bytes: previous.as_ref().and_then(|c| c.max_memory_bytes),
                     max_table_elements: previous.as_ref().and_then(|c| c.max_table_elements),
@@ -301,9 +319,13 @@ impl PluginLoader {
         Ok(reloaded)
     }
 
-    pub fn instantiate_plugin(&self, plugin_name: &str) -> Result<(wasmtime::Store<PluginState>, wasmtime::Instance)> {
+    pub fn instantiate_plugin(
+        &self,
+        plugin_name: &str,
+    ) -> Result<(wasmtime::Store<PluginState>, wasmtime::Instance)> {
         let modules = self.modules.read();
-        let module = modules.get(plugin_name)
+        let module = modules
+            .get(plugin_name)
             .context(format!("plugin '{}' not found", plugin_name))?;
 
         let configs = self.configs.read();
@@ -319,16 +341,20 @@ impl PluginLoader {
         let config_map = plugin_config.map(|c| c.config.clone()).unwrap_or_default();
         drop(configs);
 
-        let mut store = wasmtime::Store::new(&self.engine, PluginState {
-            plugin_name: plugin_name.to_string(),
-            config: config_map,
-            limiter: PluginResourceLimiter::new(plugin_name, limits),
-        });
+        let mut store = wasmtime::Store::new(
+            &self.engine,
+            PluginState {
+                plugin_name: plugin_name.to_string(),
+                config: config_map,
+                limiter: PluginResourceLimiter::new(plugin_name, limits),
+            },
+        );
 
         store.limiter(|state| &mut state.limiter);
 
         let linker = wasmtime::Linker::<PluginState>::new(&self.engine);
-        let instance = linker.instantiate(&mut store, module)
+        let instance = linker
+            .instantiate(&mut store, module)
             .context(format!("failed to instantiate plugin '{}'", plugin_name))?;
 
         Ok((store, instance))
@@ -379,7 +405,10 @@ mod tests {
         use wasmtime::ResourceLimiter;
         let mut limiter = PluginResourceLimiter::new(
             "test-plugin",
-            ResourceLimits { max_memory_bytes: 65536, max_table_elements: 100 }, // 1 page cap
+            ResourceLimits {
+                max_memory_bytes: 65536,
+                max_table_elements: 100,
+            }, // 1 page cap
         );
         // growing from 1 page (65536 bytes) to 2 pages (131072 bytes) exceeds the cap
         assert_eq!(limiter.memory_growing(65536, 131072, None).unwrap(), false);
@@ -397,7 +426,10 @@ mod tests {
         use wasmtime::ResourceLimiter;
         let mut limiter = PluginResourceLimiter::new(
             "test-plugin",
-            ResourceLimits { max_memory_bytes: ResourceLimits::default().max_memory_bytes, max_table_elements: 10 },
+            ResourceLimits {
+                max_memory_bytes: ResourceLimits::default().max_memory_bytes,
+                max_table_elements: 10,
+            },
         );
         assert_eq!(limiter.table_growing(0, 11, None).unwrap(), false);
     }
@@ -422,15 +454,17 @@ mod tests {
         let wasm_path = dir.join("tiny-memory.wasm");
         std::fs::write(&wasm_path, &wasm_bytes).unwrap();
 
-        loader.load_plugin(PluginConfig {
-            name: "tiny-memory".to_string(),
-            path: wasm_path,
-            enabled: true,
-            config: HashMap::new(),
-            source: PluginSource::File,
-            max_memory_bytes: Some(65536), // cap at the module's starting 1 page
-            max_table_elements: None,
-        }).unwrap();
+        loader
+            .load_plugin(PluginConfig {
+                name: "tiny-memory".to_string(),
+                path: wasm_path,
+                enabled: true,
+                config: HashMap::new(),
+                source: PluginSource::File,
+                max_memory_bytes: Some(65536), // cap at the module's starting 1 page
+                max_table_elements: None,
+            })
+            .unwrap();
 
         let (mut store, instance) = loader.instantiate_plugin("tiny-memory").unwrap();
         // The engine has `consume_fuel(true)` and `epoch_interruption(true)`
@@ -438,11 +472,16 @@ mod tests {
         // deadline before any call, or wasmtime traps immediately on entry.
         store.set_fuel(1_000_000).unwrap();
         store.set_epoch_deadline(1_000_000);
-        let start = instance.get_typed_func::<(), i32>(&mut store, "_start").unwrap();
+        let start = instance
+            .get_typed_func::<(), i32>(&mut store, "_start")
+            .unwrap();
         let result = start.call(&mut store, ()).unwrap();
 
         // memory.grow returns -1 (not a trap) when growth is denied by the host limiter.
-        assert_eq!(result, -1, "memory.grow should have been denied by the configured 1-page limit");
+        assert_eq!(
+            result, -1,
+            "memory.grow should have been denied by the configured 1-page limit"
+        );
 
         std::fs::remove_dir_all(&dir).ok();
     }

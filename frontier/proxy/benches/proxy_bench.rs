@@ -1,10 +1,10 @@
 use criterion::{black_box, criterion_group, criterion_main, Criterion};
 use std::collections::HashMap;
-use tpt_frontier_proxy::loadbalancer::{
-    BackendEndpoint, ConsistentHashBalancer, LeastConnectionsBalancer,
-    LoadBalancer, RoundRobinBalancer,
-};
 use std::net::SocketAddr;
+use tpt_frontier_proxy::loadbalancer::{
+    BackendEndpoint, ConsistentHashBalancer, LeastConnectionsBalancer, LoadBalancer,
+    RoundRobinBalancer,
+};
 
 fn make_endpoints(n: usize) -> Vec<BackendEndpoint> {
     (0..n)

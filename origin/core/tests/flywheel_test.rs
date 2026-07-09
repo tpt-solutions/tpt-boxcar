@@ -3,9 +3,7 @@ use std::time::Duration;
 
 use tpt_origin_core::dns::DnsResolver;
 use tpt_origin_core::lifecycle::LifecycleManager;
-use tpt_origin_core::manifest::{
-    Manifest, ProcessService, Service, WasmService,
-};
+use tpt_origin_core::manifest::{Manifest, ProcessService, Service, WasmService};
 use tpt_origin_core::network::{NetworkConfig, NetworkManager};
 use tpt_origin_core::runtime::ServiceStatus;
 
@@ -18,7 +16,12 @@ use tpt_origin_core::runtime::ServiceStatus;
 /// itself, so a portable process stand-in keeps it meaningful cross-platform.
 fn long_running_command() -> Vec<String> {
     if cfg!(windows) {
-        vec!["ping".to_string(), "-n".to_string(), "20".to_string(), "127.0.0.1".to_string()]
+        vec![
+            "ping".to_string(),
+            "-n".to_string(),
+            "20".to_string(),
+            "127.0.0.1".to_string(),
+        ]
     } else {
         vec!["sleep".to_string(), "20".to_string()]
     }
@@ -26,9 +29,9 @@ fn long_running_command() -> Vec<String> {
 
 use tpt_scope_agent::enrichment::EnrichmentProvider;
 use tpt_scope_agent::probes::{
-    EventData, NetworkEvent, NetworkEventType, ProbeCategory, ProbeEvent, ProbeManager,
-    ProbeState, SyscallEvent, SyscallEventType, TransportProtocol, WasmEvent, WasmEventType,
-    NetworkProbe, SyscallProbe, WasmProbe,
+    EventData, NetworkEvent, NetworkEventType, NetworkProbe, ProbeCategory, ProbeEvent,
+    ProbeManager, ProbeState, SyscallEvent, SyscallEventType, SyscallProbe, TransportProtocol,
+    WasmEvent, WasmEventType, WasmProbe,
 };
 
 fn flywheel_manifest(wasm_path: std::path::PathBuf) -> Manifest {
@@ -39,12 +42,10 @@ fn flywheel_manifest(wasm_path: std::path::PathBuf) -> Manifest {
         Service::Process(ProcessService {
             command: long_running_command(),
             ports: vec![],
-            environment: HashMap::from([(
-                "POSTGRES_PASSWORD".to_string(),
-                "test".to_string(),
-            )]),
+            environment: HashMap::from([("POSTGRES_PASSWORD".to_string(), "test".to_string())]),
             working_dir: None,
             depends_on: vec![],
+            resources: None,
             restart_policy: Default::default(),
         }),
     );
@@ -60,6 +61,7 @@ fn flywheel_manifest(wasm_path: std::path::PathBuf) -> Manifest {
                 "postgres://test@db/app".to_string(),
             )]),
             memory_limit: Some("256m".to_string()),
+            resources: None,
             depends_on: vec!["db".to_string()],
             expected_signature: None,
             trusted_public_key: None,
@@ -75,6 +77,7 @@ fn flywheel_manifest(wasm_path: std::path::PathBuf) -> Manifest {
             environment: HashMap::new(),
             working_dir: None,
             depends_on: vec!["api".to_string()],
+            resources: None,
             restart_policy: Default::default(),
         }),
     );
@@ -127,7 +130,11 @@ async fn test_flywheel_origin_to_scope() {
     assert!(lifecycle.get_service_status("proxy").is_some());
 
     for (name, health) in lifecycle.list_services() {
-        assert_eq!(health.status, ServiceStatus::Running, "service {name} should be running");
+        assert_eq!(
+            health.status,
+            ServiceStatus::Running,
+            "service {name} should be running"
+        );
     }
 
     // --- Origin: DNS resolution ---

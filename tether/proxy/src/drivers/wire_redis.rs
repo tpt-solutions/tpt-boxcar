@@ -114,8 +114,7 @@ impl RedisWireDriver {
                 if data.len() >= 3 {
                     let encoding =
                         std::str::from_utf8(&data[..3]).context("invalid verbatim encoding")?;
-                    let text =
-                        std::str::from_utf8(&data[3..]).context("invalid verbatim text")?;
+                    let text = std::str::from_utf8(&data[3..]).context("invalid verbatim text")?;
                     Ok(RespFrame::VerbatimString(
                         encoding.to_string(),
                         text.to_string(),
@@ -318,7 +317,10 @@ impl RedisWireDriver {
 
         // Select database
         if self.db > 0 {
-            match self.send_and_read(&["SELECT", &self.db.to_string()]).await? {
+            match self
+                .send_and_read(&["SELECT", &self.db.to_string()])
+                .await?
+            {
                 RespFrame::Simple(s) if s == "OK" => {
                     debug!(db = self.db, "selected database");
                 }

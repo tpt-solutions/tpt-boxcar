@@ -38,28 +38,24 @@ impl RetryPolicy {
         for attempt in 0..=self.max_retries {
             match f().await {
                 Ok(result) => return Ok(result),
-                Err(e) => {
-                    match &e {
-                        LlmError::RateLimit { retry_after } => {
-                            let delay = retry_after
-                                .map(Duration::from_secs)
-                                .unwrap_or_else(|| self.backoff(attempt));
-                            tokio::time::sleep(delay).await;
-                            last_err = Some(e);
-                        }
-                        LlmError::Unavailable(_) if attempt < self.max_retries => {
-                            tokio::time::sleep(self.backoff(attempt)).await;
-                            last_err = Some(e);
-                        }
-                        _ => return Err(e),
+                Err(e) => match &e {
+                    LlmError::RateLimit { retry_after } => {
+                        let delay = retry_after
+                            .map(Duration::from_secs)
+                            .unwrap_or_else(|| self.backoff(attempt));
+                        tokio::time::sleep(delay).await;
+                        last_err = Some(e);
                     }
-                }
+                    LlmError::Unavailable(_) if attempt < self.max_retries => {
+                        tokio::time::sleep(self.backoff(attempt)).await;
+                        last_err = Some(e);
+                    }
+                    _ => return Err(e),
+                },
             }
         }
 
-        Err(last_err.unwrap_or_else(|| {
-            LlmError::Unavailable("all retries exhausted".into())
-        }))
+        Err(last_err.unwrap_or_else(|| LlmError::Unavailable("all retries exhausted".into())))
     }
 
     fn backoff(&self, attempt: u32) -> Duration {

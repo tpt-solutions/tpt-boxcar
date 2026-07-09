@@ -5,10 +5,7 @@ use anyhow::{Context, Result};
 use parking_lot::RwLock;
 use tracing::{debug, info, warn};
 
-use crate::abi::{
-    HttpRequest, HttpResponse, LogLevel, PluginHost,
-    PluginManifest, FilterResult,
-};
+use crate::abi::{FilterResult, HttpRequest, HttpResponse, LogLevel, PluginHost, PluginManifest};
 
 pub struct HostState {
     shared_data: RwLock<HashMap<String, Vec<u8>>>,
@@ -86,7 +83,10 @@ impl PluginHost for HostImpl {
     }
 
     fn http_request(&self, request: &HttpRequest) -> Result<HttpResponse, String> {
-        warn!("plugin http_request not yet implemented for: {}", request.path);
+        warn!(
+            "plugin http_request not yet implemented for: {}",
+            request.path
+        );
         Ok(HttpResponse {
             status: 501,
             headers: HashMap::new(),
@@ -116,7 +116,10 @@ impl PluginManager {
 
     pub fn register_plugin(&self, manifest: PluginManifest) -> Result<()> {
         let name = manifest.metadata.name.clone();
-        info!("registering plugin: {} v{}", name, manifest.metadata.version);
+        info!(
+            "registering plugin: {} v{}",
+            name, manifest.metadata.version
+        );
 
         let mut plugins = self.plugins.write();
         plugins.push(LoadedPlugin {
@@ -143,7 +146,8 @@ impl PluginManager {
 
     pub fn enable_plugin(&self, name: &str) -> Result<()> {
         let mut plugins = self.plugins.write();
-        let plugin = plugins.iter_mut()
+        let plugin = plugins
+            .iter_mut()
             .find(|p| p.name == name)
             .context(format!("plugin '{}' not found", name))?;
         plugin.enabled = true;
@@ -153,7 +157,8 @@ impl PluginManager {
 
     pub fn disable_plugin(&self, name: &str) -> Result<()> {
         let mut plugins = self.plugins.write();
-        let plugin = plugins.iter_mut()
+        let plugin = plugins
+            .iter_mut()
             .find(|p| p.name == name)
             .context(format!("plugin '{}' not found", name))?;
         plugin.enabled = false;
@@ -170,10 +175,7 @@ impl PluginManager {
         self.host_state.clone()
     }
 
-    pub fn process_request(
-        &self,
-        _request: &HttpRequest,
-    ) -> Result<FilterResult> {
+    pub fn process_request(&self, _request: &HttpRequest) -> Result<FilterResult> {
         let plugins = self.plugins.read();
         for plugin in plugins.iter() {
             if !plugin.enabled {

@@ -122,7 +122,11 @@ impl Distiller {
         Self
     }
 
-    pub async fn distill(&self, analysis: &AnalysisResult, image_root: &Path) -> Result<DistilledImage> {
+    pub async fn distill(
+        &self,
+        analysis: &AnalysisResult,
+        image_root: &Path,
+    ) -> Result<DistilledImage> {
         info!("Distilling image: {}", analysis.phase1.image.name);
 
         let sbom = self
@@ -203,10 +207,14 @@ impl Distiller {
         match Self::run_syft(image_root, "cyclonedx-json").await {
             Ok(Some(raw)) => match Self::parse_syft_cyclonedx(&raw) {
                 Ok(doc) => return Ok(doc),
-                Err(e) => warn!("failed to parse syft output ({e:#}); falling back to heuristic SBOM"),
+                Err(e) => {
+                    warn!("failed to parse syft output ({e:#}); falling back to heuristic SBOM")
+                }
             },
             Ok(None) => info!("syft not found on PATH; falling back to heuristic SBOM generation"),
-            Err(e) => warn!("syft invocation failed ({e:#}); falling back to heuristic SBOM generation"),
+            Err(e) => {
+                warn!("syft invocation failed ({e:#}); falling back to heuristic SBOM generation")
+            }
         }
         Ok(Self::generate_sbom_heuristic(dependencies))
     }
@@ -304,7 +312,10 @@ impl Distiller {
                 .as_str()
                 .map(String::from)
                 .unwrap_or_else(|| Uuid::new_v4().to_string()),
-            version: doc["version"].as_u64().map(|v| v.to_string()).unwrap_or_else(|| "1.0".to_string()),
+            version: doc["version"]
+                .as_u64()
+                .map(|v| v.to_string())
+                .unwrap_or_else(|| "1.0".to_string()),
             created: doc["metadata"]["timestamp"]
                 .as_str()
                 .map(String::from)
@@ -327,10 +338,14 @@ impl Distiller {
                     doc.spec_version = "SPDX-2.3".to_string();
                     return Ok(doc);
                 }
-                Err(e) => warn!("failed to parse syft SPDX output ({e:#}); falling back to heuristic SBOM"),
+                Err(e) => warn!(
+                    "failed to parse syft SPDX output ({e:#}); falling back to heuristic SBOM"
+                ),
             },
             Ok(None) => info!("syft not found on PATH; falling back to heuristic SBOM generation"),
-            Err(e) => warn!("syft invocation failed ({e:#}); falling back to heuristic SBOM generation"),
+            Err(e) => {
+                warn!("syft invocation failed ({e:#}); falling back to heuristic SBOM generation")
+            }
         }
         let mut doc = Self::generate_sbom_heuristic(dependencies);
         doc.format = SbomFormat::Spdx;
@@ -371,7 +386,9 @@ impl Distiller {
         match Self::run_grype(image_root).await {
             Ok(Some(raw)) => match Self::parse_grype_json(&raw, sbom.components.len()) {
                 Ok(scan) => return Ok(scan),
-                Err(e) => warn!("failed to parse grype output ({e:#}); falling back to heuristic CVE scan"),
+                Err(e) => warn!(
+                    "failed to parse grype output ({e:#}); falling back to heuristic CVE scan"
+                ),
             },
             Ok(None) => info!("grype not found on PATH; falling back to heuristic CVE scan"),
             Err(e) => warn!("grype invocation failed ({e:#}); falling back to heuristic CVE scan"),
@@ -456,8 +473,14 @@ impl Distiller {
                 CveFinding {
                     id: vuln["id"].as_str().unwrap_or("unknown").to_string(),
                     severity,
-                    package: m["artifact"]["name"].as_str().unwrap_or("unknown").to_string(),
-                    version: m["artifact"]["version"].as_str().unwrap_or("unknown").to_string(),
+                    package: m["artifact"]["name"]
+                        .as_str()
+                        .unwrap_or("unknown")
+                        .to_string(),
+                    version: m["artifact"]["version"]
+                        .as_str()
+                        .unwrap_or("unknown")
+                        .to_string(),
                     fixed_in: vuln["fix"]["versions"]
                         .as_array()
                         .and_then(|v| v.first())

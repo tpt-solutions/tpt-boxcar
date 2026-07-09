@@ -41,10 +41,16 @@ impl PromptCache {
             value: response.to_string(),
             inserted_at: Instant::now(),
         };
-        self.entries.lock().unwrap_or_else(|e| e.into_inner()).put(key, entry);
+        self.entries
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .put(key, entry);
     }
 
     pub fn clear(&self) {
-        self.entries.lock().unwrap_or_else(|e| e.into_inner()).clear();
+        self.entries
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clear();
     }
 }

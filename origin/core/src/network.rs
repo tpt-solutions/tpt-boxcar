@@ -58,7 +58,11 @@ impl NetworkManager {
     }
 
     pub async fn create_network(&mut self, config: NetworkConfig) -> Result<()> {
-        tracing::info!("Creating network: {} (driver: {})", config.name, config.driver);
+        tracing::info!(
+            "Creating network: {} (driver: {})",
+            config.name,
+            config.driver
+        );
 
         let subnet_prefix = if let Some(subnet) = &config.subnet {
             subnet
@@ -123,7 +127,9 @@ impl NetworkManager {
 
     /// The driver a network was created with (as recorded in the manifest).
     pub fn network_driver(&self, network_name: &str) -> Option<&str> {
-        self.networks.get(network_name).map(|n| n.config.driver.as_str())
+        self.networks
+            .get(network_name)
+            .map(|n| n.config.driver.as_str())
     }
 
     /// The address allocated to a service on a network, if it's connected.
@@ -141,8 +147,13 @@ impl NetworkManager {
     /// services that share the host's own network namespace (`process`,
     /// in-process `wasm`) and don't need a veth of their own. Returns the
     /// allocated IP.
-    pub async fn connect_service(&mut self, service_name: &str, network_name: &str) -> Result<String> {
-        self.connect_service_inner(service_name, network_name, None).await
+    pub async fn connect_service(
+        &mut self,
+        service_name: &str,
+        network_name: &str,
+    ) -> Result<String> {
+        self.connect_service_inner(service_name, network_name, None)
+            .await
     }
 
     /// Same as [`Self::connect_service`], but for a service that really has
@@ -156,7 +167,8 @@ impl NetworkManager {
         network_name: &str,
         pid: u32,
     ) -> Result<String> {
-        self.connect_service_inner(service_name, network_name, Some(pid)).await
+        self.connect_service_inner(service_name, network_name, Some(pid))
+            .await
     }
 
     async fn connect_service_inner(
@@ -199,12 +211,19 @@ impl NetworkManager {
 
         net.connected.insert(
             service_name.to_string(),
-            ConnectedService { ip: ip.clone(), veth_host },
+            ConnectedService {
+                ip: ip.clone(),
+                veth_host,
+            },
         );
         Ok(ip)
     }
 
-    pub async fn disconnect_service(&mut self, service_name: &str, network_name: &str) -> Result<()> {
+    pub async fn disconnect_service(
+        &mut self,
+        service_name: &str,
+        network_name: &str,
+    ) -> Result<()> {
         tracing::info!("Disconnecting service {service_name} from network {network_name}");
         if let Some(net) = self.networks.get_mut(network_name) {
             if let Some(conn) = net.connected.remove(service_name) {
@@ -271,7 +290,11 @@ fn veth_name_for(service_name: &str) -> String {
 }
 
 #[cfg(target_os = "linux")]
-async fn create_platform_bridge(network_name: &str, gateway: &str, prefix_len: u8) -> Option<String> {
+async fn create_platform_bridge(
+    network_name: &str,
+    gateway: &str,
+    prefix_len: u8,
+) -> Option<String> {
     let bridge = bridge_name_for(network_name);
     tracing::info!("Creating Linux bridge {bridge} for network {network_name}");
 
@@ -290,7 +313,17 @@ async fn create_platform_bridge(network_name: &str, gateway: &str, prefix_len: u
         return None;
     }
 
-    let addr = run("ip", &["addr", "add", &format!("{gateway}/{prefix_len}"), "dev", &bridge]).await;
+    let addr = run(
+        "ip",
+        &[
+            "addr",
+            "add",
+            &format!("{gateway}/{prefix_len}"),
+            "dev",
+            &bridge,
+        ],
+    )
+    .await;
     if !matches!(&addr, Ok(o) if succeeded_or_already_exists(o)) {
         tracing::warn!("failed to assign gateway address {gateway}/{prefix_len} to {bridge}");
     }
@@ -337,7 +370,9 @@ async fn attach_service_netns(
 
     let add = run(
         "ip",
-        &["link", "add", &veth_host, "type", "veth", "peer", "name", &veth_peer],
+        &[
+            "link", "add", &veth_host, "type", "veth", "peer", "name", &veth_peer,
+        ],
     )
     .await?;
     anyhow::ensure!(
@@ -354,7 +389,11 @@ async fn attach_service_netns(
     );
 
     let up = run("ip", &["link", "set", &veth_host, "up"]).await?;
-    anyhow::ensure!(up.status.success(), "failed to bring up {veth_host}: {}", stderr_of(&up));
+    anyhow::ensure!(
+        up.status.success(),
+        "failed to bring up {veth_host}: {}",
+        stderr_of(&up)
+    );
 
     let move_ns = run("ip", &["link", "set", &veth_peer, "netns", &pid_s]).await?;
     anyhow::ensure!(
@@ -365,7 +404,17 @@ async fn attach_service_netns(
 
     let addr = run(
         "nsenter",
-        &["-t", &pid_s, "-n", "ip", "addr", "add", &format!("{ip}/{prefix_len}"), "dev", &veth_peer],
+        &[
+            "-t",
+            &pid_s,
+            "-n",
+            "ip",
+            "addr",
+            "add",
+            &format!("{ip}/{prefix_len}"),
+            "dev",
+            &veth_peer,
+        ],
     )
     .await?;
     anyhow::ensure!(
@@ -374,16 +423,28 @@ async fn attach_service_netns(
         stderr_of(&addr)
     );
 
-    let ifup = run("nsenter", &["-t", &pid_s, "-n", "ip", "link", "set", &veth_peer, "up"]).await?;
+    let ifup = run(
+        "nsenter",
+        &["-t", &pid_s, "-n", "ip", "link", "set", &veth_peer, "up"],
+    )
+    .await?;
     anyhow::ensure!(
         ifup.status.success(),
         "failed to bring up {veth_peer} inside netns of pid {pid}: {}",
         stderr_of(&ifup)
     );
 
-    if let Ok(lo_up) = run("nsenter", &["-t", &pid_s, "-n", "ip", "link", "set", "lo", "up"]).await {
+    if let Ok(lo_up) = run(
+        "nsenter",
+        &["-t", &pid_s, "-n", "ip", "link", "set", "lo", "up"],
+    )
+    .await
+    {
         if !lo_up.status.success() {
-            tracing::warn!("failed to bring up loopback inside netns of pid {pid}: {}", stderr_of(&lo_up));
+            tracing::warn!(
+                "failed to bring up loopback inside netns of pid {pid}: {}",
+                stderr_of(&lo_up)
+            );
         }
     }
 
@@ -419,7 +480,11 @@ async fn teardown_bridge(bridge: Option<&str>) {
 /// address configured, which is what a future macOS container runtime would
 /// attach container-side taps to.
 #[cfg(target_os = "macos")]
-async fn create_platform_bridge(network_name: &str, gateway: &str, prefix_len: u8) -> Option<String> {
+async fn create_platform_bridge(
+    network_name: &str,
+    gateway: &str,
+    prefix_len: u8,
+) -> Option<String> {
     tracing::info!("Creating macOS bridge interface for network {network_name}");
 
     let create = match run("ifconfig", &["bridge", "create"]).await {
@@ -442,7 +507,11 @@ async fn create_platform_bridge(network_name: &str, gateway: &str, prefix_len: u
         return None;
     }
 
-    let addr = run("ifconfig", &[&name, "inet", &format!("{gateway}/{prefix_len}")]).await;
+    let addr = run(
+        "ifconfig",
+        &[&name, "inet", &format!("{gateway}/{prefix_len}")],
+    )
+    .await;
     if !matches!(&addr, Ok(o) if o.status.success()) {
         tracing::warn!("failed to assign gateway address {gateway}/{prefix_len} to {name}");
     }
@@ -481,9 +550,15 @@ async fn teardown_bridge(bridge: Option<&str>) {
 /// an elevated (Administrator) process; falls back to bookkeeping-only mode
 /// otherwise, same as the other platforms.
 #[cfg(target_os = "windows")]
-async fn create_platform_bridge(network_name: &str, gateway: &str, prefix_len: u8) -> Option<String> {
+async fn create_platform_bridge(
+    network_name: &str,
+    gateway: &str,
+    prefix_len: u8,
+) -> Option<String> {
     let switch_name = format!("tpt-{network_name}");
-    tracing::info!("Creating Windows Hyper-V internal switch {switch_name} for network {network_name}");
+    tracing::info!(
+        "Creating Windows Hyper-V internal switch {switch_name} for network {network_name}"
+    );
 
     let adapter_name = format!("vEthernet ({switch_name})");
     let script = format!(
@@ -498,11 +573,19 @@ async fn create_platform_bridge(network_name: &str, gateway: &str, prefix_len: u
          Write-Output '{adapter_name}'"
     );
 
-    let out = run("powershell", &["-NoProfile", "-NonInteractive", "-Command", &script]).await;
+    let out = run(
+        "powershell",
+        &["-NoProfile", "-NonInteractive", "-Command", &script],
+    )
+    .await;
     match out {
         Ok(o) if o.status.success() => {
             let name = String::from_utf8_lossy(&o.stdout).trim().to_string();
-            if name.is_empty() { None } else { Some(name) }
+            if name.is_empty() {
+                None
+            } else {
+                Some(name)
+            }
         }
         Ok(o) => {
             tracing::warn!(
@@ -531,16 +614,24 @@ async fn teardown_bridge(bridge: Option<&str>) {
         .strip_prefix("vEthernet (")
         .and_then(|s| s.strip_suffix(')'))
         .unwrap_or(adapter_name);
-    let script = format!(
-        "Remove-VMSwitch -Name '{switch_name}' -Force -ErrorAction SilentlyContinue"
-    );
-    if let Err(e) = run("powershell", &["-NoProfile", "-NonInteractive", "-Command", &script]).await {
+    let script =
+        format!("Remove-VMSwitch -Name '{switch_name}' -Force -ErrorAction SilentlyContinue");
+    if let Err(e) = run(
+        "powershell",
+        &["-NoProfile", "-NonInteractive", "-Command", &script],
+    )
+    .await
+    {
         tracing::warn!("failed to invoke PowerShell to remove switch {switch_name}: {e}");
     }
 }
 
 #[cfg(not(any(target_os = "linux", target_os = "macos", target_os = "windows")))]
-async fn create_platform_bridge(network_name: &str, _gateway: &str, _prefix_len: u8) -> Option<String> {
+async fn create_platform_bridge(
+    network_name: &str,
+    _gateway: &str,
+    _prefix_len: u8,
+) -> Option<String> {
     tracing::warn!("no real networking support for this platform; network '{network_name}' is bookkeeping-only");
     None
 }

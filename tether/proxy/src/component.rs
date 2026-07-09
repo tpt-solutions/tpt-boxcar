@@ -109,7 +109,10 @@ impl tpt::tether::data::HostTransaction for WitHostState {
         &mut self,
         _self_: wasmtime::component::Resource<tpt::tether::data::Transaction>,
     ) -> Result<(), TetherError> {
-        let tx = self.open_transaction.take().ok_or(TetherError::NotConnected)?;
+        let tx = self
+            .open_transaction
+            .take()
+            .ok_or(TetherError::NotConnected)?;
         tx.commit().await.map_err(to_wit_error)
     }
 
@@ -117,7 +120,10 @@ impl tpt::tether::data::HostTransaction for WitHostState {
         &mut self,
         _self_: wasmtime::component::Resource<tpt::tether::data::Transaction>,
     ) -> Result<(), TetherError> {
-        let tx = self.open_transaction.take().ok_or(TetherError::NotConnected)?;
+        let tx = self
+            .open_transaction
+            .take()
+            .ok_or(TetherError::NotConnected)?;
         tx.rollback().await.map_err(to_wit_error)
     }
 
@@ -146,7 +152,10 @@ impl tpt::tether::data::Host for WitHostState {
 
     async fn execute(&mut self, sql: String, params: Vec<WitValue>) -> Result<u64, TetherError> {
         let params: Vec<serde_json::Value> = params.iter().map(from_wit_value).collect();
-        self.driver.execute(&sql, &params).await.map_err(to_wit_error)
+        self.driver
+            .execute(&sql, &params)
+            .await
+            .map_err(to_wit_error)
     }
 
     async fn begin_transaction(
@@ -169,8 +178,15 @@ impl tpt::tether::data::Host for WitHostState {
 impl tpt::tether::kv::Host for WitHostState {
     async fn get(&mut self, key: String) -> Result<Option<String>, TetherError> {
         require_redis(&self.driver)?;
-        match self.driver.query("GET", &[serde_json::Value::String(key)]).await {
-            Ok(row) => Ok(row.values.first().and_then(|v| v.as_str().map(String::from))),
+        match self
+            .driver
+            .query("GET", &[serde_json::Value::String(key)])
+            .await
+        {
+            Ok(row) => Ok(row
+                .values
+                .first()
+                .and_then(|v| v.as_str().map(String::from))),
             Err(e) => Err(to_wit_error(e)),
         }
     }
@@ -180,7 +196,10 @@ impl tpt::tether::kv::Host for WitHostState {
         self.driver
             .execute(
                 "SET",
-                &[serde_json::Value::String(key), serde_json::Value::String(value)],
+                &[
+                    serde_json::Value::String(key),
+                    serde_json::Value::String(value),
+                ],
             )
             .await
             .map(|_| ())
@@ -201,7 +220,10 @@ impl tpt::tether::kv::Host for WitHostState {
             .driver
             .execute(
                 "EXPIRE",
-                &[serde_json::Value::String(key), serde_json::Value::Number(ttl_secs.into())],
+                &[
+                    serde_json::Value::String(key),
+                    serde_json::Value::Number(ttl_secs.into()),
+                ],
             )
             .await
             .map_err(to_wit_error)?;

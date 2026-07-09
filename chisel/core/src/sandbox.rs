@@ -3,8 +3,8 @@ use std::path::PathBuf;
 
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
-use uuid::Uuid;
 use tracing::info;
+use uuid::Uuid;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SandboxConfig {
@@ -120,7 +120,10 @@ impl SandboxRunner {
         let sandbox_id = Uuid::new_v4().to_string();
 
         if config.network_isolation {
-            info!("Creating isolated network namespace for sandbox: {}", sandbox_id);
+            info!(
+                "Creating isolated network namespace for sandbox: {}",
+                sandbox_id
+            );
         }
 
         for probe in &config.ebpf_probes {
@@ -154,7 +157,10 @@ impl SandboxProvider for SandboxRunner {
         let sandbox_id = Uuid::new_v4().to_string();
         let created_at = chrono::Utc::now().to_rfc3339();
 
-        info!("Starting sandbox: {} with image: {}", sandbox_id, config.image_name);
+        info!(
+            "Starting sandbox: {} with image: {}",
+            sandbox_id, config.image_name
+        );
 
         let info = SandboxInfo {
             sandbox_id: sandbox_id.clone(),

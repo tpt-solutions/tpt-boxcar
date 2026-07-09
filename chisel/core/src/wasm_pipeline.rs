@@ -207,12 +207,14 @@ async fn parse_wasm_exports_imports(path: &Path) -> Result<(Vec<String>, Vec<Str
         match payload.context("failed to parse wasm module structure")? {
             wasmparser::Payload::ExportSection(reader) => {
                 for export in reader {
-                    exported_functions.push(export.context("malformed export entry")?.name.to_string());
+                    exported_functions
+                        .push(export.context("malformed export entry")?.name.to_string());
                 }
             }
             wasmparser::Payload::ImportSection(reader) => {
                 for import in reader {
-                    imported_modules.push(import.context("malformed import entry")?.module.to_string());
+                    imported_modules
+                        .push(import.context("malformed import entry")?.module.to_string());
                 }
             }
             _ => {}
@@ -326,7 +328,8 @@ impl RustWasmCompiler {
             output_path.display()
         );
         let size_bytes = tokio::fs::metadata(&output_path).await?.len();
-        let (exported_functions, imported_modules) = parse_wasm_exports_imports(&output_path).await?;
+        let (exported_functions, imported_modules) =
+            parse_wasm_exports_imports(&output_path).await?;
 
         Ok(CompilationResult {
             success: true,
@@ -429,8 +432,16 @@ impl GoWasmCompiler {
         let compilation_time_ms = start.elapsed().as_millis() as u64;
 
         let stderr = String::from_utf8_lossy(&output.stderr).to_string();
-        let warnings: Vec<String> = stderr.lines().filter(|l| l.contains("warning:")).map(String::from).collect();
-        let errors: Vec<String> = stderr.lines().filter(|l| l.contains("error")).map(String::from).collect();
+        let warnings: Vec<String> = stderr
+            .lines()
+            .filter(|l| l.contains("warning:"))
+            .map(String::from)
+            .collect();
+        let errors: Vec<String> = stderr
+            .lines()
+            .filter(|l| l.contains("error"))
+            .map(String::from)
+            .collect();
 
         if !output.status.success() {
             return Ok(CompilationResult {
@@ -451,7 +462,8 @@ impl GoWasmCompiler {
             output_path.display()
         );
         let size_bytes = tokio::fs::metadata(&output_path).await?.len();
-        let (exported_functions, imported_modules) = parse_wasm_exports_imports(&output_path).await?;
+        let (exported_functions, imported_modules) =
+            parse_wasm_exports_imports(&output_path).await?;
 
         Ok(CompilationResult {
             success: true,
@@ -565,10 +577,7 @@ impl EmscriptenCompiler {
         source_path: &Path,
         config: &CompilationConfig,
     ) -> Result<CompilationResult> {
-        info!(
-            "Compiling C/C++ with Emscripten: {}",
-            source_path.display()
-        );
+        info!("Compiling C/C++ with Emscripten: {}", source_path.display());
 
         let Ok(emcc) = which::which("emcc") else {
             return Ok(CompilationResult {
@@ -588,17 +597,28 @@ impl EmscriptenCompiler {
         let sources: Vec<String> = if source_path.is_file() {
             vec![source_path.to_string_lossy().to_string()]
         } else {
-            let mut entries = tokio::fs::read_dir(source_path).await.context("failed to read source directory")?;
+            let mut entries = tokio::fs::read_dir(source_path)
+                .await
+                .context("failed to read source directory")?;
             let mut found = Vec::new();
             while let Some(entry) = entries.next_entry().await? {
-                let ext = entry.path().extension().and_then(|e| e.to_str()).unwrap_or("").to_string();
+                let ext = entry
+                    .path()
+                    .extension()
+                    .and_then(|e| e.to_str())
+                    .unwrap_or("")
+                    .to_string();
                 if matches!(ext.as_str(), "c" | "cpp" | "cc" | "cxx") {
                     found.push(entry.path().to_string_lossy().to_string());
                 }
             }
             found
         };
-        anyhow::ensure!(!sources.is_empty(), "no .c/.cpp source files found under {}", source_path.display());
+        anyhow::ensure!(
+            !sources.is_empty(),
+            "no .c/.cpp source files found under {}",
+            source_path.display()
+        );
 
         let output_path = source_path.join(&config.output_name);
         let mut args = sources;
@@ -640,8 +660,16 @@ impl EmscriptenCompiler {
         let compilation_time_ms = start.elapsed().as_millis() as u64;
 
         let stderr = String::from_utf8_lossy(&output.stderr).to_string();
-        let warnings: Vec<String> = stderr.lines().filter(|l| l.contains("warning:")).map(String::from).collect();
-        let errors: Vec<String> = stderr.lines().filter(|l| l.contains("error")).map(String::from).collect();
+        let warnings: Vec<String> = stderr
+            .lines()
+            .filter(|l| l.contains("warning:"))
+            .map(String::from)
+            .collect();
+        let errors: Vec<String> = stderr
+            .lines()
+            .filter(|l| l.contains("error"))
+            .map(String::from)
+            .collect();
 
         if !output.status.success() {
             return Ok(CompilationResult {
@@ -662,7 +690,8 @@ impl EmscriptenCompiler {
             output_path.display()
         );
         let size_bytes = tokio::fs::metadata(&output_path).await?.len();
-        let (exported_functions, imported_modules) = parse_wasm_exports_imports(&output_path).await?;
+        let (exported_functions, imported_modules) =
+            parse_wasm_exports_imports(&output_path).await?;
 
         Ok(CompilationResult {
             success: true,
@@ -861,19 +890,31 @@ mod real_compilation_tests {
             .await
             .expect("compile should not error");
 
-        assert!(result.success, "compile should succeed: {:?}", result.errors);
-        assert!(result.size_bytes > 0, "a real cargo build must produce a nonzero-size wasm binary");
+        assert!(
+            result.success,
+            "compile should succeed: {:?}",
+            result.errors
+        );
+        assert!(
+            result.size_bytes > 0,
+            "a real cargo build must produce a nonzero-size wasm binary"
+        );
         assert!(result.output_path.exists());
 
         let bytes = std::fs::read(&result.output_path).unwrap();
-        assert_eq!(&bytes[0..4], b"\0asm", "output file must be a real wasm module, not fabricated data");
+        assert_eq!(
+            &bytes[0..4],
+            b"\0asm",
+            "output file must be a real wasm module, not fabricated data"
+        );
     }
 
     #[tokio::test]
     async fn compile_reports_missing_cargo_toml_honestly() {
         let compiler = RustWasmCompiler;
         let config = CompilationConfig::default();
-        let empty_dir = std::env::temp_dir().join(format!("chisel-no-cargo-toml-{}", std::process::id()));
+        let empty_dir =
+            std::env::temp_dir().join(format!("chisel-no-cargo-toml-{}", std::process::id()));
         std::fs::create_dir_all(&empty_dir).unwrap();
 
         let result = compiler.compile(&empty_dir, &config).await.unwrap();

@@ -53,7 +53,10 @@ impl ConnectEvent {
     /// as-is by the `no_std`, no-heap `probe` crate; string conversion
     /// happens on the userspace (`loader`) side, which has `std`.
     pub fn comm_len(&self) -> usize {
-        self.comm.iter().position(|&b| b == 0).unwrap_or(self.comm.len())
+        self.comm
+            .iter()
+            .position(|&b| b == 0)
+            .unwrap_or(self.comm.len())
     }
 }
 
@@ -96,6 +99,9 @@ impl SyscallEvent {
     }
 
     pub fn comm_len(&self) -> usize {
-        self.comm.iter().position(|&b| b == 0).unwrap_or(self.comm.len())
+        self.comm
+            .iter()
+            .position(|&b| b == 0)
+            .unwrap_or(self.comm.len())
     }
 }

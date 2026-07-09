@@ -32,7 +32,10 @@ pub fn topological_waves(manifest: &Manifest) -> Result<Vec<Vec<String>>> {
                 dep
             );
             *in_degree.get_mut(name.as_str()).unwrap() += 1;
-            dependents.entry(dep.as_str()).or_default().push(name.as_str());
+            dependents
+                .entry(dep.as_str())
+                .or_default()
+                .push(name.as_str());
         }
     }
 
@@ -50,7 +53,10 @@ pub fn topological_waves(manifest: &Manifest) -> Result<Vec<Vec<String>>> {
         anyhow::ensure!(
             !wave.is_empty(),
             "circular dependency detected among services: {:?}",
-            remaining.keys().filter(|n| !resolved.contains(*n)).collect::<Vec<_>>()
+            remaining
+                .keys()
+                .filter(|n| !resolved.contains(*n))
+                .collect::<Vec<_>>()
         );
 
         for name in &wave {
@@ -203,7 +209,11 @@ impl LifecycleManager {
         let pid = self.runtime.list_pids().get(name).copied();
         for net_name in self.network_names.clone() {
             let result = match pid {
-                Some(pid) => self.network.connect_service_with_pid(name, &net_name, pid).await,
+                Some(pid) => {
+                    self.network
+                        .connect_service_with_pid(name, &net_name, pid)
+                        .await
+                }
                 None => self.network.connect_service(name, &net_name).await,
             };
             match result {
@@ -253,7 +263,9 @@ impl LifecycleManager {
     async fn disconnect_service_networks(&mut self, name: &str) {
         for net_name in self.network_names.clone() {
             if let Err(e) = self.network.disconnect_service(name, &net_name).await {
-                tracing::warn!("failed to disconnect service '{name}' from network '{net_name}': {e:#}");
+                tracing::warn!(
+                    "failed to disconnect service '{name}' from network '{net_name}': {e:#}"
+                );
             }
         }
     }
@@ -368,7 +380,11 @@ mod topological_waves_tests {
             environment: HashMap::new(),
             working_dir: None,
             depends_on: depends_on.iter().map(|s| s.to_string()).collect(),
+            resources: None,
             restart_policy: Default::default(),
+            env_file: None,
+            secrets: None,
+            security: None,
         })
     }
 
@@ -390,7 +406,14 @@ mod topological_waves_tests {
         // c depends on b, b depends on a -> waves must be [a], [b], [c]
         let manifest = manifest_with(&[("a", &[]), ("b", &["a"]), ("c", &["b"])]);
         let waves = topological_waves(&manifest).unwrap();
-        assert_eq!(waves, vec![vec!["a".to_string()], vec!["b".to_string()], vec!["c".to_string()]]);
+        assert_eq!(
+            waves,
+            vec![
+                vec!["a".to_string()],
+                vec!["b".to_string()],
+                vec!["c".to_string()]
+            ]
+        );
     }
 
     #[test]

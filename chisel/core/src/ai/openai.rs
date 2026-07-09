@@ -49,8 +49,7 @@ impl LlmProvider for OpenAiProvider {
             .https_only()
             .enable_http1()
             .build();
-        let client: Client<_, Full<Bytes>> = Client::builder(TokioExecutor::new())
-            .build(https);
+        let client: Client<_, Full<Bytes>> = Client::builder(TokioExecutor::new()).build(https);
 
         let req = Request::builder()
             .method("POST")
@@ -60,15 +59,15 @@ impl LlmProvider for OpenAiProvider {
             .body(Full::new(Bytes::from(body.to_string())))
             .map_err(|e| LlmError::Network(format!("failed to build request: {e}")))?;
 
-        let resp = client.request(req).await.map_err(|e| {
-            LlmError::Network(format!("failed to fetch response: {e}"))
-        })?;
+        let resp = client
+            .request(req)
+            .await
+            .map_err(|e| LlmError::Network(format!("failed to fetch response: {e}")))?;
 
         let status = resp.status();
         if !status.is_success() {
             if status.as_u16() == 429 {
-                let retry_after = extract_retry_after(resp.headers())
-                    .map(|d| d.as_secs());
+                let retry_after = extract_retry_after(resp.headers()).map(|d| d.as_secs());
                 return Err(LlmError::RateLimit { retry_after });
             }
             if status.as_u16() == 401 {
@@ -118,9 +117,7 @@ impl LlmProvider for OpenAiProvider {
         }
 
         if content.is_empty() {
-            return Err(LlmError::ParseError(
-                "empty response from openai".into(),
-            ));
+            return Err(LlmError::ParseError("empty response from openai".into()));
         }
 
         Ok(content)

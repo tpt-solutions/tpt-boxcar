@@ -42,7 +42,10 @@ async fn postgres_parameterized_execute_and_query_roundtrip() {
         )
         .await
         .expect("parameterized insert");
-    assert_eq!(inserted, 1, "expected 1 affected row from INSERT, got {inserted}");
+    assert_eq!(
+        inserted, 1,
+        "expected 1 affected row from INSERT, got {inserted}"
+    );
 
     driver
         .execute(
@@ -59,7 +62,10 @@ async fn postgres_parameterized_execute_and_query_roundtrip() {
         )
         .await
         .expect("parameterized update");
-    assert_eq!(updated, 1, "expected 1 affected row from UPDATE, got {updated}");
+    assert_eq!(
+        updated, 1,
+        "expected 1 affected row from UPDATE, got {updated}"
+    );
 
     let result = driver
         .query(
@@ -79,7 +85,10 @@ async fn postgres_parameterized_execute_and_query_roundtrip() {
         .execute("DELETE FROM widgets WHERE name = $1", &[json!("nut")])
         .await
         .expect("parameterized delete");
-    assert_eq!(deleted, 1, "expected 1 affected row from DELETE, got {deleted}");
+    assert_eq!(
+        deleted, 1,
+        "expected 1 affected row from DELETE, got {deleted}"
+    );
 }
 
 #[tokio::test]
@@ -109,7 +118,10 @@ async fn mysql_parameterized_execute_and_query_roundtrip() {
         )
         .await
         .expect("parameterized insert");
-    assert_eq!(inserted, 1, "expected 1 affected row from INSERT, got {inserted}");
+    assert_eq!(
+        inserted, 1,
+        "expected 1 affected row from INSERT, got {inserted}"
+    );
 
     driver
         .execute(
@@ -126,7 +138,10 @@ async fn mysql_parameterized_execute_and_query_roundtrip() {
         )
         .await
         .expect("parameterized update");
-    assert_eq!(updated, 1, "expected 1 affected row from UPDATE, got {updated}");
+    assert_eq!(
+        updated, 1,
+        "expected 1 affected row from UPDATE, got {updated}"
+    );
 
     let result = driver
         .query(
@@ -146,5 +161,8 @@ async fn mysql_parameterized_execute_and_query_roundtrip() {
         .execute("DELETE FROM widgets WHERE name = ?", &[json!("nut")])
         .await
         .expect("parameterized delete");
-    assert_eq!(deleted, 1, "expected 1 affected row from DELETE, got {deleted}");
+    assert_eq!(
+        deleted, 1,
+        "expected 1 affected row from DELETE, got {deleted}"
+    );
 }

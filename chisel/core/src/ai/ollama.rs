@@ -43,8 +43,7 @@ impl LlmProvider for OllamaProvider {
             .https_only()
             .enable_http1()
             .build();
-        let client: Client<_, Full<Bytes>> = Client::builder(TokioExecutor::new())
-            .build(https);
+        let client: Client<_, Full<Bytes>> = Client::builder(TokioExecutor::new()).build(https);
 
         let req = Request::builder()
             .method("POST")
@@ -53,9 +52,10 @@ impl LlmProvider for OllamaProvider {
             .body(Full::new(Bytes::from(body.to_string())))
             .map_err(|e| LlmError::Network(format!("failed to build request: {e}")))?;
 
-        let resp = client.request(req).await.map_err(|e| {
-            LlmError::Network(format!("failed to fetch response: {e}"))
-        })?;
+        let resp = client
+            .request(req)
+            .await
+            .map_err(|e| LlmError::Network(format!("failed to fetch response: {e}")))?;
 
         let status = resp.status();
         if !status.is_success() {
@@ -98,9 +98,7 @@ impl LlmProvider for OllamaProvider {
         }
 
         if content.is_empty() {
-            return Err(LlmError::ParseError(
-                "empty response from ollama".into(),
-            ));
+            return Err(LlmError::ParseError("empty response from ollama".into()));
         }
 
         Ok(content)

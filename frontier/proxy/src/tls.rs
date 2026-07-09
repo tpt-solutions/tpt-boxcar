@@ -7,8 +7,8 @@ use std::sync::Arc;
 use anyhow::{Context, Result};
 use rustls::pki_types::{CertificateDer, PrivateKeyDer};
 use rustls::ServerConfig;
-use tokio_rustls::TlsAcceptor as RustlsTlsAcceptor;
 use tokio::sync::RwLock;
+use tokio_rustls::TlsAcceptor as RustlsTlsAcceptor;
 use tracing::{debug, info};
 
 #[derive(Debug, Clone)]
@@ -62,7 +62,10 @@ impl TlsAcceptor {
     where
         IO: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin,
     {
-        self.inner.accept(stream).await.context("TLS handshake failed")
+        self.inner
+            .accept(stream)
+            .await
+            .context("TLS handshake failed")
     }
 
     pub fn reload_certs(&self) -> Result<()> {
@@ -80,7 +83,8 @@ impl TlsAcceptor {
 
     pub async fn remove_sni_cert(&self, sni_name: &str) -> Result<()> {
         let mut certs = self.cert_paths.write().await;
-        certs.remove(sni_name)
+        certs
+            .remove(sni_name)
             .context(format!("SNI cert not found: {}", sni_name))?;
         debug!("removed SNI cert for: {}", sni_name);
         Ok(())
@@ -92,25 +96,35 @@ impl TlsAcceptor {
     }
 }
 
-fn load_cert_and_key(cert_path: &Path, key_path: &Path) -> Result<(Vec<CertificateDer<'static>>, PrivateKeyDer<'static>)> {
-    let cert_file = File::open(cert_path)
-        .context(format!("failed to open cert: {}", cert_path.display()))?;
+fn load_cert_and_key(
+    cert_path: &Path,
+    key_path: &Path,
+) -> Result<(Vec<CertificateDer<'static>>, PrivateKeyDer<'static>)> {
+    let cert_file =
+        File::open(cert_path).context(format!("failed to open cert: {}", cert_path.display()))?;
     let mut cert_reader = BufReader::new(cert_file);
     let certs: Vec<CertificateDer<'static>> = rustls_pemfile::certs(&mut cert_reader)
         .collect::<Result<Vec<_>, _>>()
         .context("failed to parse certs")?;
 
     if certs.is_empty() {
-        return Err(anyhow::anyhow!("no certificates found in {}", cert_path.display()));
+        return Err(anyhow::anyhow!(
+            "no certificates found in {}",
+            cert_path.display()
+        ));
     }
 
-    let key_file = File::open(key_path)
-        .context(format!("failed to open key: {}", key_path.display()))?;
+    let key_file =
+        File::open(key_path).context(format!("failed to open key: {}", key_path.display()))?;
     let mut key_reader = BufReader::new(key_file);
     let key = rustls_pemfile::private_key(&mut key_reader)
         .context("failed to parse private key")?
         .context("no private key found")?;
 
-    info!("loaded {} cert(s) from {}", certs.len(), cert_path.display());
+    info!(
+        "loaded {} cert(s) from {}",
+        certs.len(),
+        cert_path.display()
+    );
     Ok((certs, key))
 }

@@ -100,8 +100,14 @@ async fn cmd_analyze(image: &PathBuf, json: bool) -> anyhow::Result<()> {
         return Ok(());
     }
 
-    println!("Image:        {}:{}", analysis.phase1.image.name, analysis.phase1.image.tag);
-    println!("Size:         {} bytes across {} layers", analysis.phase1.image.total_size_bytes, analysis.phase1.image.layer_count);
+    println!(
+        "Image:        {}:{}",
+        analysis.phase1.image.name, analysis.phase1.image.tag
+    );
+    println!(
+        "Size:         {} bytes across {} layers",
+        analysis.phase1.image.total_size_bytes, analysis.phase1.image.layer_count
+    );
     println!("Language:     {:?}", analysis.phase2.detected_language);
     println!("Wasm target:  {}", analysis.phase2.suggested_target);
     println!("Wasm compat:  {:?}", analysis.phase2.wasm_compatibility);
@@ -136,7 +142,9 @@ async fn cmd_distill(
         );
         println!(
             "CVE scan:     {} findings ({} critical, {} high)",
-            distilled.cve_scan.vulnerabilities_found, distilled.cve_scan.critical, distilled.cve_scan.high
+            distilled.cve_scan.vulnerabilities_found,
+            distilled.cve_scan.critical,
+            distilled.cve_scan.high
         );
         if let Some(path) = &distilled.wasm_migration_path {
             println!(
@@ -154,7 +162,9 @@ async fn cmd_distill(
 
     if let Some(format) = sbom {
         if format.eq_ignore_ascii_case("spdx") {
-            let spdx = distiller.generate_spdx_sbom(image, &analysis.phase1.dependencies).await?;
+            let spdx = distiller
+                .generate_spdx_sbom(image, &analysis.phase1.dependencies)
+                .await?;
             println!("\n--- SBOM (SPDX) ---");
             println!("{}", serde_json::to_string_pretty(&spdx)?);
         } else {
@@ -165,7 +175,11 @@ async fn cmd_distill(
     Ok(())
 }
 
-async fn cmd_migrate(image: &PathBuf, config_path: &PathBuf, ai_override: Option<&str>) -> anyhow::Result<()> {
+async fn cmd_migrate(
+    image: &PathBuf,
+    config_path: &PathBuf,
+    ai_override: Option<&str>,
+) -> anyhow::Result<()> {
     let config = config::load(config_path)?;
     let orchestrator = config::build_orchestrator(&config, ai_override)?;
 
@@ -200,7 +214,11 @@ async fn cmd_migrate(image: &PathBuf, config_path: &PathBuf, ai_override: Option
     Ok(())
 }
 
-async fn cmd_audit(image: &PathBuf, config_path: &PathBuf, ai_override: Option<&str>) -> anyhow::Result<()> {
+async fn cmd_audit(
+    image: &PathBuf,
+    config_path: &PathBuf,
+    ai_override: Option<&str>,
+) -> anyhow::Result<()> {
     let config = config::load(config_path)?;
     let orchestrator = config::build_orchestrator(&config, ai_override)?;
 

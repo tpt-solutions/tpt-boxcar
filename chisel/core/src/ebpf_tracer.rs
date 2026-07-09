@@ -185,7 +185,10 @@ impl Default for EbpfTracer {
 impl TracerProvider for EbpfTracer {
     async fn start_tracing(&self, config: &TraceConfig) -> Result<String> {
         let trace_id = uuid::Uuid::new_v4().to_string();
-        info!("Starting eBPF trace: {} with config: {:?}", trace_id, config);
+        info!(
+            "Starting eBPF trace: {} with config: {:?}",
+            trace_id, config
+        );
         Ok(trace_id)
     }
 

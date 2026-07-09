@@ -92,7 +92,10 @@ impl TcpConnectProbe {
 
     /// Pops the oldest captured event, if any (non-blocking).
     pub fn poll_event(&self) -> Option<ConnectEvent> {
-        self.events.lock().expect("events mutex poisoned").pop_front()
+        self.events
+            .lock()
+            .expect("events mutex poisoned")
+            .pop_front()
     }
 
     /// Removes and returns every event captured since the last drain.
@@ -134,7 +137,10 @@ fn spawn_reader(
                     continue;
                 }
                 let event = unsafe { ConnectEvent::from_bytes(&item) };
-                events.lock().expect("events mutex poisoned").push_back(event);
+                events
+                    .lock()
+                    .expect("events mutex poisoned")
+                    .push_back(event);
             }
             if !drained_any {
                 std::thread::sleep(Duration::from_millis(5));
@@ -179,9 +185,7 @@ impl SyscallProbeLoader {
         for &(prog_name, kernel_fn) in SYSCALL_KPROBE_TARGETS {
             let program: &mut KProbe = ebpf
                 .program_mut(prog_name)
-                .unwrap_or_else(|| {
-                    panic!("{prog_name} program missing from compiled probe object")
-                })
+                .unwrap_or_else(|| panic!("{prog_name} program missing from compiled probe object"))
                 .try_into()?;
             program.load()?;
             program.attach(kernel_fn, 0)?;
@@ -206,7 +210,10 @@ impl SyscallProbeLoader {
     }
 
     pub fn poll_event(&self) -> Option<SyscallEvent> {
-        self.events.lock().expect("events mutex poisoned").pop_front()
+        self.events
+            .lock()
+            .expect("events mutex poisoned")
+            .pop_front()
     }
 
     pub fn drain_events(&self) -> Vec<SyscallEvent> {
@@ -243,7 +250,10 @@ fn spawn_syscall_reader(
                     continue;
                 }
                 let event = unsafe { SyscallEvent::from_bytes(&item) };
-                events.lock().expect("events mutex poisoned").push_back(event);
+                events
+                    .lock()
+                    .expect("events mutex poisoned")
+                    .push_back(event);
             }
             if !drained_any {
                 std::thread::sleep(Duration::from_millis(5));

@@ -4,9 +4,8 @@ use tpt_scope_agent::enrichment::{
     parse_container_id_from_path, EnrichmentData, EnrichmentProvider,
 };
 use tpt_scope_agent::probes::{
-    EventData, NetworkEvent, NetworkEventType, Probe, ProbeCategory, ProbeEvent,
-    ProbeManager, ProbeState, SyscallEventType, SyscallProbe, TransportProtocol,
-    WasmProbe, NetworkProbe,
+    EventData, NetworkEvent, NetworkEventType, NetworkProbe, Probe, ProbeCategory, ProbeEvent,
+    ProbeManager, ProbeState, SyscallEventType, SyscallProbe, TransportProtocol, WasmProbe,
 };
 
 #[test]
@@ -93,12 +92,20 @@ fn test_probe_manager_attach_detach_all() {
 
     manager.attach_all().unwrap();
     for (_, cat, state) in manager.list_probes() {
-        assert!(matches!(state, ProbeState::Attached), "probe {:?} not attached", cat);
+        assert!(
+            matches!(state, ProbeState::Attached),
+            "probe {:?} not attached",
+            cat
+        );
     }
 
     manager.detach_all().unwrap();
     for (_, cat, state) in manager.list_probes() {
-        assert!(matches!(state, ProbeState::Detached), "probe {:?} not detached", cat);
+        assert!(
+            matches!(state, ProbeState::Detached),
+            "probe {:?} not detached",
+            cat
+        );
     }
 }
 
@@ -135,9 +142,7 @@ fn test_probe_event_construction() {
 #[test]
 fn test_parse_container_id_from_cgroup_path() {
     assert_eq!(
-        parse_container_id_from_path(
-            "/kubepods/burstable/pod123/abc123def456"
-        ),
+        parse_container_id_from_path("/kubepods/burstable/pod123/abc123def456"),
         Some("abc123def456".to_string())
     );
 
@@ -148,7 +153,10 @@ fn test_parse_container_id_from_cgroup_path() {
         Some("abcdef01234567890".to_string())
     );
 
-    assert_eq!(parse_container_id_from_path("/user.slice/user-1000.slice"), None);
+    assert_eq!(
+        parse_container_id_from_path("/user.slice/user-1000.slice"),
+        None
+    );
 }
 
 #[test]

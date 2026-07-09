@@ -435,8 +435,8 @@
 ### P0: Critical (Blocks basic Docker replacement workflow)
 
 - [x] Port mapping enforcement — `PortMapping` in manifest parsed but never enforced; added `PortMapper` (`origin/core/src/portmap.rs`) with TCP proxy that listens on `0.0.0.0:host_port` and forwards to `container_ip:container_port` using `tokio::io::copy_bidirectional`; wired into `LifecycleManager::up/restart/reap_and_restart/down`; `ports` field added to `ProcessService` and `WasmService`; cross-platform (no iptables dependency); verified with `proxy_forwards_bytes` test
-- [ ] `tpt origin exec` — currently a print stub (`cli/main.rs:322-325`); needs real implementation: for OCI services use `ctr tasks exec` (pattern exists in `containerd/mod.rs::exec_healthcheck`), for process services use `tokio::process::Command` with PTY
-- [ ] Dockerfile / image build — Origin can only run pre-built images; need `tpt origin build` that parses Dockerfiles, executes multi-stage builds via containerd/buildkit, produces OCI images
+- [x] `tpt origin exec` — currently a print stub (`cli/main.rs:322-325`); needs real implementation: for OCI services use `ctr tasks exec` (pattern exists in `containerd/mod.rs::exec_healthcheck`), for process services use `tokio::process::Command` with PTY
+- [x] Dockerfile / image build — Origin can only run pre-built images; need `tpt origin build` that parses Dockerfiles, executes multi-stage builds via containerd/buildkit, produces OCI images
 
 ### P1: High Priority (Significant DX or security gaps)
 

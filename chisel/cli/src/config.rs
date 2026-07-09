@@ -1,7 +1,9 @@
 use std::path::Path;
 
 use serde::Deserialize;
-use tpt_chisel_core::ai::{AiOrchestrator, ClaudeProvider, LlmProviderEnum, OllamaProvider, OpenAiProvider};
+use tpt_chisel_core::ai::{
+    AiOrchestrator, ClaudeProvider, LlmProviderEnum, OllamaProvider, OpenAiProvider,
+};
 
 #[derive(Debug, Deserialize)]
 pub struct ChiselConfig {
@@ -55,7 +57,9 @@ pub fn build_orchestrator(
                 .as_ref()
                 .ok_or_else(|| anyhow::anyhow!("chisel.yaml has no ai.local section"))?;
             match local.provider.as_str() {
-                "ollama" => LlmProviderEnum::Ollama(OllamaProvider::new(&local.endpoint, &local.model)),
+                "ollama" => {
+                    LlmProviderEnum::Ollama(OllamaProvider::new(&local.endpoint, &local.model))
+                }
                 other => anyhow::bail!("unsupported local AI provider: {other}"),
             }
         }

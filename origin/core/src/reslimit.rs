@@ -5,11 +5,20 @@ use crate::manifest::ResourceLimits;
 /// unparseable input so callers can warn rather than silently guessing.
 pub fn parse_memory_limit(value: &str) -> Option<u64> {
     let value = value.trim();
-    let (number_part, multiplier) = if let Some(n) = value.strip_suffix("Gi").or_else(|| value.strip_suffix("gi")) {
+    let (number_part, multiplier) = if let Some(n) = value
+        .strip_suffix("Gi")
+        .or_else(|| value.strip_suffix("gi"))
+    {
         (n, 1024u64 * 1024 * 1024)
-    } else if let Some(n) = value.strip_suffix("Mi").or_else(|| value.strip_suffix("mi")) {
+    } else if let Some(n) = value
+        .strip_suffix("Mi")
+        .or_else(|| value.strip_suffix("mi"))
+    {
         (n, 1024 * 1024)
-    } else if let Some(n) = value.strip_suffix("Ki").or_else(|| value.strip_suffix("ki")) {
+    } else if let Some(n) = value
+        .strip_suffix("Ki")
+        .or_else(|| value.strip_suffix("ki"))
+    {
         (n, 1024)
     } else if let Some(n) = value.strip_suffix('g').or_else(|| value.strip_suffix('G')) {
         (n, 1024 * 1024 * 1024)
@@ -22,7 +31,11 @@ pub fn parse_memory_limit(value: &str) -> Option<u64> {
     } else {
         (value, 1)
     };
-    number_part.trim().parse::<u64>().ok().map(|n| n * multiplier)
+    number_part
+        .trim()
+        .parse::<u64>()
+        .ok()
+        .map(|n| n * multiplier)
 }
 
 /// Parses a CPU limit string (e.g. `"1.5"`, `"2"`) into a fractional CPU
@@ -48,18 +61,28 @@ pub fn parse_cpu_limit(value: &str) -> Option<f64> {
 /// Must be called from a forked child process context (inside `pre_exec`).
 #[cfg(unix)]
 pub unsafe fn apply_rlimits(memory_bytes: Option<u64>, cpu_seconds: Option<u64>) {
-    use libc::{setrlimit, RLIMIT_AS, RLIMIT_CPU, rlimit};
+    use libc::{rlimit, setrlimit, RLIMIT_AS, RLIMIT_CPU};
 
     if let Some(bytes) = memory_bytes {
-        let rlim = rlimit { rlim_cur: bytes, rlim_max: bytes };
+        let rlim = rlimit {
+            rlim_cur: bytes,
+            rlim_max: bytes,
+        };
         setrlimit(RLIMIT_AS, &rlim);
     }
     if let Some(secs) = cpu_seconds {
-        let rlim = rlimit { rlim_cur: secs, rlim_max: secs };
+        let rlim = rlimit {
+            rlim_cur: secs,
+            rlim_max: secs,
+        };
         setrlimit(RLIMIT_CPU, &rlim);
     }
 }
 
+/// Non-unix no-op: rlimits don't exist on this platform.
+///
+/// # Safety
+/// Mirrors the unix signature for call-site uniformity; always safe.
 #[cfg(not(unix))]
 pub unsafe fn apply_rlimits(_memory_bytes: Option<u64>, _cpu_seconds: Option<u64>) {}
 
@@ -120,6 +143,7 @@ impl wasmtime::ResourceLimiter for WasmResourceLimiter {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use wasmtime::ResourceLimiter as _;
 
     #[test]
     fn parse_memory_limit_bytes() {
@@ -180,7 +204,9 @@ mod tests {
     fn wasm_limiter_allows_within_limit() {
         let mut limiter = WasmResourceLimiter::new(1024 * 1024); // 1 MiB
         assert!(limiter.memory_growing(0, 512 * 1024, None).unwrap()); // 512 KiB — OK
-        assert!(limiter.memory_growing(512 * 1024, 1024 * 1024, None).unwrap()); // 1 MiB — OK
+        assert!(limiter
+            .memory_growing(512 * 1024, 1024 * 1024, None)
+            .unwrap()); // 1 MiB — OK
     }
 
     #[test]

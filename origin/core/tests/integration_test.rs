@@ -38,6 +38,7 @@ fn sample_manifest(wasm_path: std::path::PathBuf) -> Manifest {
             ports: vec![],
             environment: HashMap::new(),
             memory_limit: Some("128m".to_string()),
+            resources: None,
             depends_on: vec!["api".to_string()],
             expected_signature: None,
             trusted_public_key: None,
@@ -166,7 +167,12 @@ async fn test_lifecycle_manager_creation() {
         "api".to_string(),
         Service::Process(ProcessService {
             command: if cfg!(windows) {
-                vec!["ping".to_string(), "-n".to_string(), "20".to_string(), "127.0.0.1".to_string()]
+                vec![
+                    "ping".to_string(),
+                    "-n".to_string(),
+                    "20".to_string(),
+                    "127.0.0.1".to_string(),
+                ]
             } else {
                 vec!["sleep".to_string(), "20".to_string()]
             },
@@ -174,6 +180,7 @@ async fn test_lifecycle_manager_creation() {
             environment: HashMap::new(),
             working_dir: None,
             depends_on: vec![],
+            resources: None,
             restart_policy: Default::default(),
         }),
     );
@@ -185,6 +192,7 @@ async fn test_lifecycle_manager_creation() {
             ports: vec![],
             environment: HashMap::new(),
             memory_limit: None,
+            resources: None,
             depends_on: vec!["api".to_string()],
             expected_signature: None,
             trusted_public_key: None,
@@ -199,17 +207,16 @@ async fn test_lifecycle_manager_creation() {
         volumes: HashMap::new(),
     };
     let mut lm = LifecycleManager::new(&manifest);
-    assert_eq!(
-        lm.get_service_status("api").map(|s| &s.name),
-        None
-    );
+    assert_eq!(lm.get_service_status("api").map(|s| &s.name), None);
 
     lm.up(&manifest).await.unwrap();
 
     let api_health = lm.get_service_status("api").expect("api health missing");
     assert_eq!(api_health.name, "api");
 
-    let wasm_health = lm.get_service_status("transform").expect("transform health missing");
+    let wasm_health = lm
+        .get_service_status("transform")
+        .expect("transform health missing");
     assert_eq!(wasm_health.name, "transform");
 
     let all = lm.list_services();
@@ -299,19 +306,27 @@ async fn network_manager_creates_a_real_linux_bridge() {
     .await
     .unwrap();
 
-    let bridge = net.get_bridge_interface().expect("real bridge device should have been created");
+    let bridge = net
+        .get_bridge_interface()
+        .expect("real bridge device should have been created");
     let output = std::process::Command::new("ip")
         .args(["link", "show", bridge])
         .output()
         .expect("failed to run `ip link show`");
-    assert!(output.status.success(), "bridge device {bridge} should really exist in the kernel");
+    assert!(
+        output.status.success(),
+        "bridge device {bridge} should really exist in the kernel"
+    );
 
     net.delete_network("real-bridge-test").await.unwrap();
     let after = std::process::Command::new("ip")
         .args(["link", "show", bridge])
         .output()
         .expect("failed to run `ip link show`");
-    assert!(!after.status.success(), "bridge device {bridge} should be gone after delete_network");
+    assert!(
+        !after.status.success(),
+        "bridge device {bridge} should be gone after delete_network"
+    );
 }
 
 #[tokio::test]

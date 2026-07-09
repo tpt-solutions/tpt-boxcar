@@ -33,7 +33,10 @@ fn main() {
         .expect("probe manifest has no parent dir")
         .into();
     println!("cargo:rerun-if-changed={}", probe_dir.join("src").display());
-    println!("cargo:rerun-if-changed={}", probe_dir.join("Cargo.toml").display());
+    println!(
+        "cargo:rerun-if-changed={}",
+        probe_dir.join("Cargo.toml").display()
+    );
 
     aya_build::build_ebpf([probe_package]).expect("failed to build scope-ebpf-probe");
 }

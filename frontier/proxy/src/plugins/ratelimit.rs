@@ -62,7 +62,9 @@ impl SlidingWindowCounter {
 
         if self.total >= max {
             let oldest = self.requests.first().map(|(ts, _)| *ts).unwrap_or(now);
-            let retry_after = window.checked_sub(now.duration_since(oldest)).unwrap_or(Duration::ZERO);
+            let retry_after = window
+                .checked_sub(now.duration_since(oldest))
+                .unwrap_or(Duration::ZERO);
             return RateLimitResult {
                 allowed: false,
                 remaining: 0,
@@ -187,8 +189,9 @@ impl RateLimiter {
                 self.windows.insert(key.to_string(), counter);
             }
             RateLimitStrategy::TokenBucket => {
-                let refill_rate = self.config.refill_rate
-                    .unwrap_or(self.config.max_requests as f64 / self.config.window_duration_secs as f64);
+                let refill_rate = self.config.refill_rate.unwrap_or(
+                    self.config.max_requests as f64 / self.config.window_duration_secs as f64,
+                );
                 let max_tokens = self.config.burst_size.unwrap_or(self.config.max_requests);
                 let bucket = Arc::new(Mutex::new(TokenBucket::new(max_tokens, refill_rate)));
                 self.buckets.insert(key.to_string(), bucket);

@@ -117,7 +117,11 @@ impl EnrichmentProvider {
         None
     }
 
-    fn build_enrichment(&self, pid: u32, container_id: &str) -> Result<EnrichmentData, EnrichmentError> {
+    fn build_enrichment(
+        &self,
+        pid: u32,
+        container_id: &str,
+    ) -> Result<EnrichmentData, EnrichmentError> {
         let mut data = EnrichmentData {
             container_id: container_id.to_string(),
             pid,

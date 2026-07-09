@@ -2,10 +2,10 @@ use std::fmt::Debug;
 
 use anyhow::{bail, Result};
 
-use super::QueryRow;
 use super::wire_mysql::MysqlWireDriver;
 use super::wire_postgres::PostgresWireDriver;
 use super::wire_redis::{RedisWireDriver, RespFrame};
+use super::QueryRow;
 
 /// Identifies which database driver kind is in use.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -54,13 +54,11 @@ impl WireTransaction {
                 d.execute("COMMIT", &[]).await?;
                 Ok(())
             }
-            WireTransaction::Redis(d) => {
-                match d.send_and_read(&["EXEC"]).await? {
-                    RespFrame::Array(_) => Ok(()),
-                    RespFrame::Error(e) => bail!("EXEC failed: {}", e),
-                    other => bail!("unexpected EXEC response: {:?}", other),
-                }
-            }
+            WireTransaction::Redis(d) => match d.send_and_read(&["EXEC"]).await? {
+                RespFrame::Array(_) => Ok(()),
+                RespFrame::Error(e) => bail!("EXEC failed: {}", e),
+                other => bail!("unexpected EXEC response: {:?}", other),
+            },
         }
     }
 
@@ -75,13 +73,11 @@ impl WireTransaction {
                 d.execute("ROLLBACK", &[]).await?;
                 Ok(())
             }
-            WireTransaction::Redis(d) => {
-                match d.send_and_read(&["DISCARD"]).await? {
-                    RespFrame::Simple(s) if s == "OK" => Ok(()),
-                    RespFrame::Error(e) => bail!("DISCARD failed: {}", e),
-                    other => bail!("unexpected DISCARD response: {:?}", other),
-                }
-            }
+            WireTransaction::Redis(d) => match d.send_and_read(&["DISCARD"]).await? {
+                RespFrame::Simple(s) if s == "OK" => Ok(()),
+                RespFrame::Error(e) => bail!("DISCARD failed: {}", e),
+                other => bail!("unexpected DISCARD response: {:?}", other),
+            },
         }
     }
 }
@@ -159,13 +155,11 @@ impl WireDriver {
                 d.execute("BEGIN", &[]).await?;
                 Ok(WireTransaction::Mysql(d.clone()))
             }
-            WireDriver::Redis(d) => {
-                match d.send_and_read(&["MULTI"]).await? {
-                    RespFrame::Simple(s) if s == "OK" => Ok(WireTransaction::Redis(d.clone())),
-                    RespFrame::Error(e) => bail!("MULTI failed: {}", e),
-                    other => bail!("unexpected MULTI response: {:?}", other),
-                }
-            }
+            WireDriver::Redis(d) => match d.send_and_read(&["MULTI"]).await? {
+                RespFrame::Simple(s) if s == "OK" => Ok(WireTransaction::Redis(d.clone())),
+                RespFrame::Error(e) => bail!("MULTI failed: {}", e),
+                other => bail!("unexpected MULTI response: {:?}", other),
+            },
         }
     }
 

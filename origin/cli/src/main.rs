@@ -1,3 +1,4 @@
+use anyhow::Context;
 use clap::{Parser, Subcommand};
 use std::path::PathBuf;
 
@@ -49,6 +50,11 @@ enum OriginCommands {
         /// Path to manifest file
         #[arg(short, long, default_value = "manifest.yaml")]
         manifest: PathBuf,
+        /// Watch source directories for changes and restart affected services.
+        /// Monitors directories containing service source files (wasm modules,
+        /// process binaries, Dockerfiles) and triggers a restart on change.
+        #[arg(long)]
+        watch: bool,
     },
     /// Tear down all running services
     Down,
@@ -61,6 +67,21 @@ enum OriginCommands {
         /// Follow log stream
         #[arg(short, long)]
         follow: bool,
+    },
+    /// Build an OCI image from a Dockerfile using containerd
+    Build {
+        /// Path to Dockerfile (default: ./Dockerfile)
+        #[arg(short = 'f', long = "file", default_value = "Dockerfile")]
+        dockerfile: PathBuf,
+        /// Build context directory (default: directory containing Dockerfile)
+        #[arg(short = 'c', long = "context")]
+        context: Option<PathBuf>,
+        /// Image tag (e.g. "myapp:latest")
+        #[arg(short = 't', long = "tag", required = true)]
+        tag: String,
+        /// Build argument (KEY=VALUE), can be specified multiple times
+        #[arg(short = 'B', long = "build-arg")]
+        build_args: Vec<String>,
     },
     /// Execute a command inside a running container or Wasm instance
     Exec {
@@ -89,8 +110,7 @@ async fn main() -> anyhow::Result<()> {
     tracing_subscriber::fmt()
         .with_writer(std::io::stderr)
         .with_env_filter(
-            tracing_subscriber::EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| "info".into()),
+            tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| "info".into()),
         )
         .init();
 
@@ -99,24 +119,29 @@ async fn main() -> anyhow::Result<()> {
     match cli.command {
         Commands::Origin { command } => match command {
             OriginCommands::Init { dir } => cmd_init(&dir).await,
-            OriginCommands::Up { manifest } => cmd_up(&manifest).await,
+            OriginCommands::Up { manifest, watch } => cmd_up(&manifest, watch).await,
             OriginCommands::Down => cmd_down().await,
             OriginCommands::Ps => cmd_ps().await,
             OriginCommands::Logs { service, follow } => cmd_logs(&service, follow).await,
             OriginCommands::Exec { service, cmd } => cmd_exec(&service, &cmd).await,
+            OriginCommands::Build {
+                dockerfile,
+                context,
+                tag,
+                build_args,
+            } => cmd_build(&dockerfile, context.as_ref(), &tag, &build_args).await,
             OriginCommands::Replay {
                 manifest,
                 service,
                 scope_url,
             } => cmd_replay(&manifest, &service, &scope_url).await,
         },
-        Commands::Up { manifest } => cmd_up(&manifest).await,
+        Commands::Up { manifest } => cmd_up(&manifest, false).await,
         Commands::Down => cmd_down().await,
     }
 }
 
-const MANIFEST_TEMPLATE: &str =
-    include_str!("../../examples/getting-started/manifest.yaml");
+const MANIFEST_TEMPLATE: &str = include_str!("../../examples/getting-started/manifest.yaml");
 
 async fn cmd_init(dir: &PathBuf) -> anyhow::Result<()> {
     let manifest_path = dir.join("manifest.yaml");
@@ -156,7 +181,9 @@ async fn cmd_up(manifest_path: &PathBuf) -> anyhow::Result<()> {
     let mut origin = tpt_origin_core::Origin::new(&manifest);
     origin.up(&manifest).await?;
 
-    let state_dir = manifest_path.parent().unwrap_or_else(|| std::path::Path::new("."));
+    let state_dir = manifest_path
+        .parent()
+        .unwrap_or_else(|| std::path::Path::new("."));
     let pids = origin.service_pids();
     let services = manifest
         .services
@@ -255,7 +282,10 @@ async fn cmd_ps() -> anyhow::Result<()> {
     println!("{:<20} {:<10} {:<10}", "----", "----", "------");
     if let Some(env) = state::read(std::path::Path::new("."))? {
         for svc in &env.services {
-            println!("{:<20} {:<10} {:<10}", svc.name, svc.service_type, "running");
+            println!(
+                "{:<20} {:<10} {:<10}",
+                svc.name, svc.service_type, "running"
+            );
         }
     }
     Ok(())
@@ -269,18 +299,22 @@ async fn cmd_ps() -> anyhow::Result<()> {
 /// `containerd` feature combination, while the CLI itself builds
 /// everywhere.
 fn oci_log_path(service: &str) -> std::path::PathBuf {
-    let dir = std::env::var("ORIGIN_LOGS_DIR").unwrap_or_else(|_| "/var/lib/tpt-boxcar/logs".to_string());
+    let dir =
+        std::env::var("ORIGIN_LOGS_DIR").unwrap_or_else(|_| "/var/lib/tpt-boxcar/logs".to_string());
     std::path::PathBuf::from(dir).join(format!("{service}.log"))
 }
 
 async fn cmd_logs(service: &str, follow: bool) -> anyhow::Result<()> {
-    let env = state::read(std::path::Path::new("."))?
-        .ok_or_else(|| anyhow::anyhow!("no running environment found (run `tpt origin up` first)"))?;
+    let env = state::read(std::path::Path::new("."))?.ok_or_else(|| {
+        anyhow::anyhow!("no running environment found (run `tpt origin up` first)")
+    })?;
     let svc = env
         .services
         .iter()
         .find(|s| s.name == service)
-        .ok_or_else(|| anyhow::anyhow!("service '{service}' not found in the running environment"))?;
+        .ok_or_else(|| {
+            anyhow::anyhow!("service '{service}' not found in the running environment")
+        })?;
 
     if svc.service_type != "oci" {
         anyhow::bail!(
@@ -320,7 +354,197 @@ async fn cmd_logs(service: &str, follow: bool) -> anyhow::Result<()> {
 }
 
 async fn cmd_exec(service: &str, cmd: &[String]) -> anyhow::Result<()> {
-    println!("Executing {:?} in {service}", cmd);
+    anyhow::ensure!(!cmd.is_empty(), "no command specified");
+
+    let env = state::read(std::path::Path::new("."))?.ok_or_else(|| {
+        anyhow::anyhow!("no running environment found (run `tpt origin up` first)")
+    })?;
+    let svc = env
+        .services
+        .iter()
+        .find(|s| s.name == service)
+        .ok_or_else(|| {
+            anyhow::anyhow!("service '{service}' not found in the running environment")
+        })?;
+
+    match svc.service_type.as_str() {
+        "oci" => exec_oci(service, cmd).await,
+        "process" => exec_process(cmd),
+        other => Err(anyhow::anyhow!(
+            "exec is not supported for '{other}' services"
+        )),
+    }
+}
+
+/// Executes `cmd` inside a running OCI container via `ctr tasks exec --tty`.
+/// The `--tty` flag tells containerd to allocate a PTY inside the container
+/// and forward its I/O over gRPC — stdio is inherited from this process so
+/// the user gets a real interactive session. The pattern mirrors
+/// `exec_healthcheck` in `tpt-origin-core` but adds `--tty` and inherits
+/// stdio instead of capturing output.
+async fn exec_oci(container_id: &str, cmd: &[String]) -> anyhow::Result<()> {
+    let socket = std::env::var("ORIGIN_CONTAINERD_SOCKET")
+        .unwrap_or_else(|_| "/run/containerd/containerd.sock".to_string());
+    let namespace = "tpt-boxcar";
+    let exec_id = format!("exec-{}", std::process::id());
+
+    let mut args: Vec<String> = vec![
+        "--address".into(),
+        socket,
+        "--namespace".into(),
+        namespace.into(),
+        "tasks".into(),
+        "exec".into(),
+        "--exec-id".into(),
+        exec_id,
+        "--tty".into(),
+        container_id.into(),
+    ];
+    args.extend(cmd.iter().cloned());
+
+    let status = tokio::process::Command::new("ctr")
+        .args(&args)
+        .stdin(std::process::Stdio::inherit())
+        .stdout(std::process::Stdio::inherit())
+        .stderr(std::process::Stdio::inherit())
+        .status()
+        .await
+        .context("failed to spawn `ctr tasks exec` (is containerd's `ctr` CLI installed?)")?;
+
+    if !status.success() {
+        anyhow::bail!("command exited with status {status}");
+    }
+    Ok(())
+}
+
+/// Executes `cmd` in a new process using a pseudo-terminal for interactive
+/// I/O. The child inherits the environment and working directory of the
+/// original `tpt origin up` session. Uses `portable-pty` for cross-platform
+/// PTY allocation and `crossterm` for raw-mode terminal handling.
+fn exec_process(cmd: &[String]) -> anyhow::Result<()> {
+    use crossterm::event::{Event, KeyCode, KeyModifiers};
+    use crossterm::terminal;
+    use portable_pty::{native_pty_system, CommandBuilder, PtySize};
+
+    let (program, args) = cmd
+        .split_first()
+        .ok_or_else(|| anyhow::anyhow!("empty command"))?;
+
+    let pty_system = native_pty_system();
+    let pair = pty_system.openpty(PtySize::default())?;
+
+    let mut pty_cmd = CommandBuilder::new(program);
+    pty_cmd.args(args);
+    // Inherit the parent's environment so the exec'd command sees the same
+    // vars as the service's original `tpt origin up` session.
+    for (key, value) in std::env::vars() {
+        pty_cmd.env(key, value);
+    }
+
+    let mut child = pair.slave.spawn_command(pty_cmd)?;
+
+    // The master's reader is not Clone, so move it into a dedicated thread
+    // that sends PTY output to the main thread via a channel. The main
+    // thread reads keyboard input (crossterm in raw mode) and writes it to
+    // the master's writer.
+    let (pty_out_tx, pty_out_rx) = std::sync::mpsc::channel::<Vec<u8>>();
+    let master_reader = pair.master.try_clone_reader()?;
+    let reader_thread = std::thread::spawn(move || {
+        let mut buf = [0u8; 4096];
+        let mut reader = master_reader;
+        loop {
+            match reader.read(&mut buf) {
+                Ok(0) => break,
+                Ok(n) => {
+                    if pty_out_tx.send(buf[..n].to_vec()).is_err() {
+                        break;
+                    }
+                }
+                Err(_) => break,
+            }
+        }
+    });
+
+    let mut master_writer = pair.master.take_writer()?;
+
+    // Enter raw mode so every keystroke is forwarded immediately (no line
+    // buffering, no echo — the child process owns the terminal).
+    terminal::enable_raw_mode()?;
+    // Restore the terminal on panic so the user's shell isn't left in a
+    // broken state.
+    std::panic::set_hook(Box::new(|info| {
+        let _ = terminal::disable_raw_mode();
+        eprintln!("{info}");
+    }));
+
+    let result = (|| -> anyhow::Result<u32> {
+        loop {
+            // Poll PTY output first (non-blocking channel recv), then
+            // block on the next keyboard event.
+            while let Ok(data) = pty_out_rx.try_recv() {
+                std::io::Write::write_all(&mut std::io::stdout(), &data)?;
+                std::io::Write::flush(&mut std::io::stdout())?;
+            }
+
+            if crossterm::event::poll(std::time::Duration::from_millis(10))? {
+                if let Event::Key(key) = crossterm::event::read()? {
+                    if key.code == KeyCode::Char('c')
+                        && key.modifiers.contains(KeyModifiers::CONTROL)
+                    {
+                        master_writer.write_all(&[0x03])?; // SIGINT
+                    } else if key.code == KeyCode::Char('d')
+                        && key.modifiers.contains(KeyModifiers::CONTROL)
+                    {
+                        master_writer.write_all(&[0x04])?; // EOF
+                    } else if let KeyCode::Char(c) = key.code {
+                        master_writer.write_all(&[c as u8])?;
+                    } else if key.code == KeyCode::Enter {
+                        master_writer.write_all(&[b'\r'])?;
+                    } else if key.code == KeyCode::Backspace {
+                        master_writer.write_all(&[0x7f])?;
+                    } else if let KeyCode::Esc = key.code {
+                        master_writer.write_all(&[0x1b])?;
+                    } else if let KeyCode::Tab = key.code {
+                        master_writer.write_all(&[b'\t'])?;
+                    } else if let KeyCode::Up = key.code {
+                        master_writer.write_all(b"\x1b[A")?;
+                    } else if let KeyCode::Down = key.code {
+                        master_writer.write_all(b"\x1b[B")?;
+                    } else if let KeyCode::Right = key.code {
+                        master_writer.write_all(b"\x1b[C")?;
+                    } else if let KeyCode::Left = key.code {
+                        master_writer.write_all(b"\x1b[D")?;
+                    }
+                    master_writer.flush()?;
+                }
+            }
+
+            // If the child has exited and the PTY has no more data, stop.
+            if let Ok(None) = child.try_wait() {
+                // Still running; drain remaining output below.
+            } else if pty_out_rx.try_recv().is_err() {
+                break;
+            }
+        }
+
+        // Drain any remaining PTY output after the child exits.
+        while let Ok(data) = pty_out_rx.recv() {
+            std::io::Write::write_all(&mut std::io::stdout(), &data)?;
+        }
+        std::io::Write::flush(&mut std::io::stdout())?;
+
+        let status = child.wait()?;
+        Ok(status.exit_code())
+    })();
+
+    // Always restore terminal state, even on error.
+    let _ = terminal::disable_raw_mode();
+    let _ = reader_thread.join();
+
+    let code = result?;
+    if code != 0 {
+        anyhow::bail!("command exited with code {code}");
+    }
     Ok(())
 }
 
@@ -374,7 +598,107 @@ async fn cmd_replay(manifest_path: &PathBuf, service: &str, scope_url: &str) -> 
         "Replaying '{service}' with captured args={:?}, calling `{}`",
         invocation.args, invocation.function
     );
-    tpt_origin_core::runtime::instantiate_and_run(&wasm_bytes, &invocation.args, &invocation.env, None)?;
+    tpt_origin_core::runtime::instantiate_and_run(
+        &wasm_bytes,
+        &invocation.args,
+        &invocation.env,
+        None,
+    )?;
     println!("Replay completed successfully.");
     Ok(())
 }
+
+#[cfg(target_os = "linux")]
+async fn cmd_build(
+    dockerfile_path: &PathBuf,
+    context_dir: Option<&PathBuf>,
+    tag: &str,
+    build_args: &[String],
+) -> anyhow::Result<()> {
+    use std::collections::HashMap;
+
+    // Resolve the Dockerfile path to absolute.
+    let dockerfile_path = std::fs::canonicalize(dockerfile_path).with_context(|| {
+        format!(
+            "failed to resolve Dockerfile path: {}",
+            dockerfile_path.display()
+        )
+    })?;
+
+    if !dockerfile_path.exists() {
+        anyhow::bail!("Dockerfile not found: {}", dockerfile_path.display());
+    }
+
+    // Resolve context directory: defaults to the directory containing the Dockerfile.
+    let context_dir = match context_dir {
+        Some(ctx) => std::fs::canonicalize(ctx)
+            .with_context(|| format!("failed to resolve build context: {}", ctx.display()))?,
+        None => dockerfile_path
+            .parent()
+            .unwrap_or_else(|| std::path::Path::new("."))
+            .to_path_buf(),
+    };
+
+    if !context_dir.is_dir() {
+        anyhow::bail!(
+            "build context is not a directory: {}",
+            context_dir.display()
+        );
+    }
+
+    // Parse --build-arg KEY=VALUE pairs.
+    let mut args = HashMap::new();
+    for arg in build_args {
+        let (key, value) = arg.split_once('=').ok_or_else(|| {
+            anyhow::anyhow!("invalid --build-arg format '{arg}' (expected KEY=VALUE)")
+        })?;
+        args.insert(key.to_string(), value.to_string());
+    }
+
+    // Resolve the containerd socket.
+    let socket_path = std::env::var("ORIGIN_CONTAINERD_SOCKET")
+        .unwrap_or_else(|_| "/run/containerd/containerd.sock".to_string());
+    let socket_path = std::path::PathBuf::from(socket_path);
+
+    if !socket_path.exists() {
+        anyhow::bail!(
+            "containerd socket not found at {} — is containerd running? \
+             try `systemctl status containerd`",
+            socket_path.display()
+        );
+    }
+
+    println!("Building from: {}", dockerfile_path.display());
+    println!("Context:       {}", context_dir.display());
+    println!("Tag:           {tag}");
+
+    let config = tpt_origin_core::build::BuildConfig {
+        context_dir,
+        dockerfile_path,
+        tag: tag.to_string(),
+        build_args: args,
+        socket_path,
+    };
+
+    let result = tpt_origin_core::build::build(&config)?;
+
+    println!("\nBuild complete:");
+    println!("  Image:    {}", result.image_ref);
+    println!("  Stages:   {}", result.stages_built);
+    println!("  Layers:   {}", result.layers_created);
+    println!("\nRun with: tpt origin up");
+
+    Ok(())
+}
+
+#[cfg(not(target_os = "linux"))]
+async fn cmd_build(
+    _dockerfile_path: &PathBuf,
+    _context_dir: Option<&PathBuf>,
+    _tag: &str,
+    _build_args: &[String],
+) -> anyhow::Result<()> {
+    anyhow::bail!(
+        "tpt origin build requires Linux with containerd — \
+         this platform is not supported for image building"
+ 

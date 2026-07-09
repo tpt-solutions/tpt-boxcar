@@ -198,7 +198,9 @@ fn handle_query(query: &[u8], entries: &HashMap<String, DnsEntry>) -> Option<Vec
     }
 
     let lookup_name = qname.trim_end_matches('.').to_ascii_lowercase();
-    let entry = entries.get(&format!("{lookup_name}.")).or_else(|| entries.get(&lookup_name));
+    let entry = entries
+        .get(&format!("{lookup_name}."))
+        .or_else(|| entries.get(&lookup_name));
 
     match entry.and_then(|e| e.ip.parse::<Ipv4Addr>().ok()) {
         Some(ip) => {
@@ -256,7 +258,11 @@ mod wire_protocol_tests {
         let mut entries = HashMap::new();
         entries.insert(
             "web.local".to_string(),
-            DnsEntry { name: "web".to_string(), ip: "10.0.0.2".to_string(), port: Some(8080) },
+            DnsEntry {
+                name: "web".to_string(),
+                ip: "10.0.0.2".to_string(),
+                port: Some(8080),
+            },
         );
         entries
     }
@@ -266,7 +272,11 @@ mod wire_protocol_tests {
         let query = build_query(0x1234, "web.local");
         let response = handle_query(&query, &sample_entries()).expect("should produce a response");
 
-        assert_eq!(&response[0..2], &[0x12, 0x34], "response ID must echo the query ID");
+        assert_eq!(
+            &response[0..2],
+            &[0x12, 0x34],
+            "response ID must echo the query ID"
+        );
         assert_eq!(response[2] & 0x80, 0x80, "QR bit must be set on a response");
         assert_eq!(response[3] & 0x0f, 0, "RCODE must be 0 (no error)");
 
@@ -308,10 +318,13 @@ mod wire_protocol_tests {
         client.send_to(&query, addr).await.unwrap();
 
         let mut buf = [0u8; 512];
-        let (len, _) = tokio::time::timeout(std::time::Duration::from_secs(2), client.recv_from(&mut buf))
-            .await
-            .expect("should receive a response before timeout")
-            .unwrap();
+        let (len, _) = tokio::time::timeout(
+            std::time::Duration::from_secs(2),
+            client.recv_from(&mut buf),
+        )
+        .await
+        .expect("should receive a response before timeout")
+        .unwrap();
 
         let response = &buf[..len];
         assert_eq!(&response[0..2], &[0xab, 0xcd]);
