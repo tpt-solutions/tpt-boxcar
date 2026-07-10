@@ -5,9 +5,13 @@ use tokio::net::{TcpListener, TcpStream};
 use crate::manifest::PortMapping;
 
 /// A single host→container port mapping proxy: listens on `host:port` and
-/// forwards every connection to `container_ip:container_port`.
+/// forwards every connection to `container_ip:container_port`. Holds two
+/// listener tasks — IPv4 (`0.0.0.0`) and, best-effort, IPv6 (`[::]`) — so a
+/// published port is reachable over either family, matching how Docker's
+/// userland proxy binds dual-stack.
 struct PortProxy {
     _handle: tokio::task::JoinHandle<()>,
+    _handle6: Option<tokio::task::JoinHandle<()>>,
 }
 
 /// Manages TCP proxies for all port mappings across every service in the
@@ -54,31 +58,35 @@ impl PortMapper {
                 "port mapping: {service_name} {}:{host_port} → {target_addr}",
                 mapping.protocol,
             );
+            let handle =
+                spawn_accept_loop(listener, host_addr, service_name.to_string(), host_port, target_addr.clone());
 
-            let svc = service_name.to_string();
-            let handle = tokio::spawn(async move {
-                loop {
-                    match listener.accept().await {
-                        Ok((client_stream, peer)) => {
-                            let target = target_addr.clone();
-                            let svc = svc.clone();
-                            tokio::spawn(async move {
-                                if let Err(e) = proxy_connection(client_stream, &target).await {
-                                    tracing::trace!(
-                                        "proxy {svc}:{host_port}→{target} connection from {peer} ended: {e}",
-                                    );
-                                }
-                            });
-                        }
-                        Err(e) => {
-                            tracing::warn!("accept error on {host_addr}: {e}");
-                            break;
-                        }
-                    }
+            // IPv6 is best-effort: on hosts without IPv6, or where
+            // `net.ipv6.bindv6only` already makes the v4 bind above cover
+            // v6-mapped traffic, this simply fails to bind and is skipped —
+            // the v4 mapping above still works either way.
+            let host_addr6 = format!("[::]:{host_port}");
+            let handle6 = match TcpListener::bind(&host_addr6).await {
+                Ok(l) => Some(spawn_accept_loop(
+                    l,
+                    host_addr6,
+                    service_name.to_string(),
+                    host_port,
+                    target_addr,
+                )),
+                Err(e) => {
+                    tracing::debug!("port mapping {host_port} IPv6 bind skipped: {e}");
+                    None
                 }
-            });
+            };
 
-            self.proxies.insert(key, PortProxy { _handle: handle });
+            self.proxies.insert(
+                key,
+                PortProxy {
+                    _handle: handle,
+                    _handle6: handle6,
+                },
+            );
         }
         Ok(())
     }
@@ -112,6 +120,38 @@ impl Default for PortMapper {
     fn default() -> Self {
         Self::new()
     }
+}
+
+/// Spawns the accept→forward loop for a single bound listener (either the
+/// IPv4 or IPv6 side of a port mapping).
+fn spawn_accept_loop(
+    listener: TcpListener,
+    host_addr: String,
+    svc: String,
+    host_port: u16,
+    target_addr: String,
+) -> tokio::task::JoinHandle<()> {
+    tokio::spawn(async move {
+        loop {
+            match listener.accept().await {
+                Ok((client_stream, peer)) => {
+                    let target = target_addr.clone();
+                    let svc = svc.clone();
+                    tokio::spawn(async move {
+                        if let Err(e) = proxy_connection(client_stream, &target).await {
+                            tracing::trace!(
+                                "proxy {svc}:{host_port}→{target} connection from {peer} ended: {e}",
+                            );
+                        }
+                    });
+                }
+                Err(e) => {
+                    tracing::warn!("accept error on {host_addr}: {e}");
+                    break;
+                }
+            }
+        }
+    })
 }
 
 /// Forwards bytes bidirectionally between `client` and `target_addr`.

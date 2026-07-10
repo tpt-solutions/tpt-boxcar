@@ -184,6 +184,19 @@ pub struct MountSpec {
     pub host_source: String,
     pub container_target: String,
     pub read_only: bool,
+    /// Mount type: `bind` (default), `tmpfs` (in-memory), or `volume` (named).
+    pub mount_type: MountType,
+    /// Options for tmpfs mounts (e.g., "size=100m,mode=755").
+    pub tmpfs_options: Option<String>,
+}
+
+/// Mount type for container mounts.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub enum MountType {
+    #[default]
+    Bind,
+    Tmpfs,
+    Volume,
 }
 
 pub struct ContainerdClient {
@@ -311,16 +324,52 @@ impl ContainerdClient {
             args.push(cpus.to_string());
         }
         for mount in &spec.mounts {
-            let options = if mount.read_only {
-                "rbind:ro"
-            } else {
-                "rbind:rw"
-            };
-            args.push("--mount".to_string());
-            args.push(format!(
-                "type=bind,src={},dst={},options={options}",
-                mount.host_source, mount.container_target
-            ));
+            match mount.mount_type {
+                MountType::Tmpfs => {
+                    let mut options = Vec::new();
+                    if mount.read_only {
+                        options.push("ro".to_string());
+                    }
+                    if let Some(ref tmpfs_opts) = mount.tmpfs_options {
+                        options.push(tmpfs_opts.clone());
+                    } else {
+                        // Default tmpfs options
+                        options.push("size=100m".to_string());
+                        options.push("mode=1777".to_string());
+                    }
+                    args.push("--mount".to_string());
+                    args.push(format!(
+                        "type=tmpfs,dst={},options={}",
+                        mount.container_target,
+                        options.join(",")
+                    ));
+                }
+                MountType::Volume => {
+                    // Named volumes use bind mounts to managed directories
+                    let options = if mount.read_only {
+                        "rbind:ro"
+                    } else {
+                        "rbind:rw"
+                    };
+                    args.push("--mount".to_string());
+                    args.push(format!(
+                        "type=bind,src={},dst={},options={options}",
+                        mount.host_source, mount.container_target
+                    ));
+                }
+                MountType::Bind => {
+                    let options = if mount.read_only {
+                        "rbind:ro"
+                    } else {
+                        "rbind:rw"
+                    };
+                    args.push("--mount".to_string());
+                    args.push(format!(
+                        "type=bind,src={},dst={},options={options}",
+                        mount.host_source, mount.container_target
+                    ));
+                }
+            }
         }
 
         // Security: capabilities and privilege restrictions
@@ -461,6 +510,39 @@ impl ContainerdClient {
             }
         }
 
+        Ok(())
+    }
+
+    /// Pauses a container's task using containerd's cgroup freezer.
+    /// The container's CPU and memory usage will be frozen until unpaused.
+    pub async fn pause_container(&self, id: &str) -> Result<()> {
+        use containerd_client::services::v1::PauseTaskRequest;
+
+        let mut tasks = TasksClient::new(self.channel.clone());
+        let req = PauseTaskRequest {
+            container_id: id.to_string(),
+        };
+        let req = with_namespace!(req, self.namespace);
+        tasks
+            .pause(req)
+            .await
+            .context(format!("failed to pause container '{id}'"))?;
+        Ok(())
+    }
+
+    /// Unpauses a paused container's task.
+    pub async fn unpause_container(&self, id: &str) -> Result<()> {
+        use containerd_client::services::v1::ResumeTaskRequest;
+
+        let mut tasks = TasksClient::new(self.channel.clone());
+        let req = ResumeTaskRequest {
+            container_id: id.to_string(),
+        };
+        let req = with_namespace!(req, self.namespace);
+        tasks
+            .resume(req)
+            .await
+            .context(format!("failed to unpause container '{id}'"))?;
         Ok(())
     }
 

@@ -1,3 +1,4 @@
+pub mod pubsub;
 pub mod wire;
 pub mod wire_mysql;
 pub mod wire_postgres;
@@ -6,6 +7,7 @@ pub mod wire_redis;
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 
+pub use pubsub::{PubSubMessage, Subscription};
 pub use wire::{box_driver, DriverKind, WireDriver, WireTransaction};
 pub use wire_mysql::MysqlWireDriver;
 pub use wire_postgres::PostgresWireDriver;

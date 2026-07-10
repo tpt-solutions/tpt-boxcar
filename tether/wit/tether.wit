@@ -51,11 +51,6 @@ interface data {
 
 /// Key-value operations. Only meaningful when the host driver is Redis;
 /// calling these against a non-KV-capable driver returns `unsupported-operation`.
-///
-/// NOTE: pub/sub is intentionally not part of this interface yet. A long-lived
-/// subscription doesn't map cleanly onto WIT's synchronous call/return shape —
-/// it needs either a `wasi:io/streams`-based design or a polling API, which is
-/// real design work deferred to a future v2 (see TODO.md Phase 10).
 interface kv {
     use types.{tether-error};
 
@@ -63,6 +58,46 @@ interface kv {
     set: func(key: string, value: string) -> result<_, tether-error>;
     del: func(key: string) -> result<u64, tether-error>;
     expire: func(key: string, ttl-secs: u64) -> result<bool, tether-error>;
+}
+
+/// Publish/subscribe, backed by Redis. Only meaningful when the host driver
+/// is Redis; calling these against a non-pub/sub-capable driver returns
+/// `unsupported-operation`.
+///
+/// A long-lived subscription doesn't map onto WIT's synchronous call/return
+/// shape, so this is a *polling* API rather than a blocking stream: opening
+/// a `subscription` starts a real dedicated connection to the backing Redis
+/// server (issuing `SUBSCRIBE`) whose incoming `message`/`pmessage` frames
+/// are drained by the host into an in-memory queue in the background;
+/// `subscription.poll` is a non-blocking pop against that queue, returning
+/// `none` immediately when nothing is buffered. Guests are expected to call
+/// `poll` on a loop/timer rather than assume it blocks until a message
+/// arrives.
+interface pubsub {
+    use types.{tether-error};
+
+    record message {
+        channel: string,
+        payload: string,
+    }
+
+    resource subscription {
+        /// Opens a new subscription, connecting and issuing `SUBSCRIBE` for
+        /// `channels` (may be empty — channels can be added later via
+        /// `subscribe`).
+        open: static func(channels: list<string>) -> result<subscription, tether-error>;
+        /// Adds more channels to this subscription.
+        subscribe: func(channels: list<string>) -> result<_, tether-error>;
+        /// Removes channels from this subscription.
+        unsubscribe: func(channels: list<string>) -> result<_, tether-error>;
+        /// Non-blocking: returns the next buffered message, if any.
+        poll: func() -> result<option<message>, tether-error>;
+    }
+
+    /// One-shot publish; not part of the `subscription` resource since a
+    /// publisher doesn't need one open. Returns the number of subscribers
+    /// that received the message (Redis's own `PUBLISH` return value).
+    publish: func(channel: string, payload: string) -> result<u64, tether-error>;
 }
 
 /// The world a Wasm guest imports to talk to Tether.
@@ -73,6 +108,7 @@ interface kv {
 world tether-guest {
     import data;
     import kv;
+    import pubsub;
 
     export run: func() -> string;
 }

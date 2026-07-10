@@ -10,6 +10,10 @@ members = [
     "frontier/proxy",
     "frontier/plugin-sdk",
 ]
+# scope/ebpf/ has its own workspace (nightly + bpfel-unknown-none target);
+# exclude it so `cargo check --workspace` doesn't try to compile its
+# Linux-only crates (aya, aya-obj) on Windows/macOS.
+exclude = ["scope/ebpf"]
 
 [workspace.package]
 version = "0.1.0"

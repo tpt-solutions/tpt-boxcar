@@ -8,6 +8,11 @@ pub struct NetworkConfig {
     pub driver: String,
     pub subnet: Option<String>,
     pub gateway: Option<String>,
+    /// VXLAN Network Identifier, required when `driver == "overlay"`.
+    pub vni: Option<u32>,
+    /// Remote host IPs to peer with over VXLAN unicast, used when
+    /// `driver == "overlay"`.
+    pub peers: Vec<String>,
 }
 
 /// A service attached to a network: its allocated IP, and — on Linux, when
@@ -19,6 +24,9 @@ pub struct NetworkConfig {
 #[derive(Debug, Clone)]
 struct ConnectedService {
     ip: String,
+    /// IPv6 address allocated from the network's ULA subnet, alongside the
+    /// IPv4 address above — every network is dual-stack.
+    ipv6: String,
     /// Only read (by `teardown_veth`) on Linux, the only platform that
     /// creates one; see `attach_service_netns`.
     #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
@@ -36,6 +44,11 @@ struct NetworkState {
     subnet_prefix: String,
     prefix_len: u8,
     gateway: String,
+    /// IPv6 ULA (`fd00::/8`) /64 derived from the same subnet index as
+    /// `subnet_prefix`, e.g. `"fd00:88:4::"` — every network is dual-stack.
+    subnet6_prefix: String,
+    prefix6_len: u8,
+    gateway6: String,
     next_host_octet: u8,
     connected: HashMap<String, ConnectedService>,
 }
@@ -92,10 +105,30 @@ impl NetworkManager {
             .clone()
             .unwrap_or_else(|| format!("{subnet_prefix}.1"));
 
+        // Derive a unique-local-address (fd00::/8, RFC 4193) /64 from the
+        // same subnet index used for the IPv4 /24, so every network gets a
+        // dual-stack allocation without needing a separate v6-specific
+        // config knob or counter.
+        let subnet_index: u8 = subnet_prefix
+            .rsplit('.')
+            .next()
+            .and_then(|s| s.parse().ok())
+            .unwrap_or(0);
+        let subnet6_prefix = format!("fd00:88:{subnet_index:x}::");
+        let prefix6_len: u8 = 64;
+        let gateway6 = format!("{subnet6_prefix}1");
+
         let bridge_name = if self.rootless {
             create_rootless_network(&config.name, &gateway, prefix_len).await
         } else {
-            create_platform_bridge(&config.name, &gateway, prefix_len).await
+            create_platform_bridge(
+                &config.name,
+                &gateway,
+                prefix_len,
+                &gateway6,
+                prefix6_len,
+            )
+            .await
         };
 
         if bridge_name.is_none() {
@@ -105,6 +138,27 @@ impl NetworkManager {
                 config.name
             );
         }
+
+        if config.driver == "overlay" {
+            match (&bridge_name, config.vni) {
+                (Some(bridge), Some(vni)) => {
+                    if !attach_overlay_uplink(&config.name, bridge, vni, &config.peers).await {
+                        tracing::warn!(
+                            "network '{}' has driver: overlay but the VXLAN uplink could not be \
+                             created — falling back to single-host bridge connectivity only",
+                            config.name
+                        );
+                    }
+                }
+                (Some(_), None) => tracing::warn!(
+                    "network '{}' has driver: overlay but no `vni` set — no VXLAN uplink created, \
+                     falling back to single-host bridge connectivity only",
+                    config.name
+                ),
+                (None, _) => {}
+            }
+        }
+
         self.bridge_interface = bridge_name.clone();
 
         self.networks.insert(
@@ -115,6 +169,9 @@ impl NetworkManager {
                 subnet_prefix,
                 prefix_len,
                 gateway,
+                subnet6_prefix,
+                prefix6_len,
+                gateway6,
                 next_host_octet: 2,
                 connected: HashMap::new(),
             },
@@ -142,6 +199,13 @@ impl NetworkManager {
         self.networks.get(network_name).map(|n| n.gateway.as_str())
     }
 
+    /// The IPv6 gateway address assigned to a network's bridge/switch.
+    pub fn network_gateway6(&self, network_name: &str) -> Option<&str> {
+        self.networks
+            .get(network_name)
+            .map(|n| n.gateway6.as_str())
+    }
+
     /// The driver a network was created with (as recorded in the manifest).
     pub fn network_driver(&self, network_name: &str) -> Option<&str> {
         self.networks
@@ -149,13 +213,23 @@ impl NetworkManager {
             .map(|n| n.config.driver.as_str())
     }
 
-    /// The address allocated to a service on a network, if it's connected.
+    /// The IPv4 address allocated to a service on a network, if connected.
     pub fn assigned_ip(&self, network_name: &str, service_name: &str) -> Option<&str> {
         self.networks
             .get(network_name)?
             .connected
             .get(service_name)
             .map(|c| c.ip.as_str())
+    }
+
+    /// The IPv6 address allocated to a service on a network, if connected —
+    /// every service gets one alongside its IPv4 address.
+    pub fn assigned_ipv6(&self, network_name: &str, service_name: &str) -> Option<&str> {
+        self.networks
+            .get(network_name)?
+            .connected
+            .get(service_name)
+            .map(|c| c.ipv6.as_str())
     }
 
     /// Attaches a service to a network for bookkeeping purposes only
@@ -212,12 +286,25 @@ impl NetworkManager {
         );
         net.next_host_octet += 1;
         let ip = format!("{}.{}", net.subnet_prefix, host_octet);
+        let ipv6 = format!("{}{:x}", net.subnet6_prefix, host_octet);
 
-        tracing::info!("Connecting service {service_name} to network {network_name} at {ip}");
+        tracing::info!(
+            "Connecting service {service_name} to network {network_name} at {ip} / {ipv6}"
+        );
 
         let mut veth_host = None;
         if let (Some(bridge), Some(pid)) = (net.bridge_name.as_deref(), pid) {
-            match attach_service_netns(service_name, bridge, &ip, net.prefix_len, pid).await {
+            match attach_service_netns(
+                service_name,
+                bridge,
+                &ip,
+                net.prefix_len,
+                &ipv6,
+                net.prefix6_len,
+                pid,
+            )
+            .await
+            {
                 Ok(host_if) => veth_host = host_if,
                 Err(e) => tracing::warn!(
                     "failed to attach {service_name} to bridge {bridge}, it will have an \
@@ -230,6 +317,7 @@ impl NetworkManager {
             service_name.to_string(),
             ConnectedService {
                 ip: ip.clone(),
+                ipv6,
                 veth_host,
             },
         );
@@ -291,6 +379,18 @@ fn bridge_name_for(network_name: &str) -> String {
     }
 }
 
+/// VXLAN device name for an overlay network, same `IFNAMSIZ`-safe truncation
+/// as `bridge_name_for`.
+#[cfg(target_os = "linux")]
+fn vxlan_name_for(network_name: &str) -> String {
+    let candidate = format!("vx-{network_name}");
+    if candidate.len() <= 15 {
+        candidate
+    } else {
+        format!("vx-{}", short_hash(network_name))
+    }
+}
+
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 fn short_hash(input: &str) -> String {
     use sha2::{Digest, Sha256};
@@ -311,6 +411,8 @@ async fn create_platform_bridge(
     network_name: &str,
     gateway: &str,
     prefix_len: u8,
+    gateway6: &str,
+    prefix6_len: u8,
 ) -> Option<String> {
     let bridge = bridge_name_for(network_name);
     tracing::info!("Creating Linux bridge {bridge} for network {network_name}");
@@ -345,6 +447,23 @@ async fn create_platform_bridge(
         tracing::warn!("failed to assign gateway address {gateway}/{prefix_len} to {bridge}");
     }
 
+    // IPv6 gateway is best-effort, same reasoning as the veth side above.
+    let addr6 = run(
+        "ip",
+        &[
+            "-6",
+            "addr",
+            "add",
+            &format!("{gateway6}/{prefix6_len}"),
+            "dev",
+            &bridge,
+        ],
+    )
+    .await;
+    if !matches!(&addr6, Ok(o) if succeeded_or_already_exists(o)) {
+        tracing::warn!("failed to assign IPv6 gateway address {gateway6}/{prefix6_len} to {bridge}");
+    }
+
     match run("ip", &["link", "set", &bridge, "up"]).await {
         Ok(o) if o.status.success() => Some(bridge),
         Ok(o) => {
@@ -358,6 +477,114 @@ async fn create_platform_bridge(
     }
 }
 
+/// Creates a real VXLAN interface (`ip link add ... type vxlan`) and joins
+/// it as a port of the network's bridge, giving every service on the bridge
+/// multi-host reachability to peer hosts running the same `vni` — the same
+/// structural approach Docker's own `overlay` driver uses (bridge + VXLAN
+/// port), minus a KV-store-backed control plane: peer discovery here is a
+/// static `peers` list from the manifest rather than automatic, and FDB
+/// entries are unicast head-end replication (`bridge fdb append ... dst
+/// <peer>`) instead of multicast, so it works across networks/clouds that
+/// don't route multicast.
+#[cfg(target_os = "linux")]
+async fn attach_overlay_uplink(network_name: &str, bridge: &str, vni: u32, peers: &[String]) -> bool {
+    let vxlan = vxlan_name_for(network_name);
+    tracing::info!(
+        "Creating VXLAN uplink {vxlan} (vni {vni}) for overlay network {network_name}, \
+         peers: {peers:?}"
+    );
+
+    let add = match run(
+        "ip",
+        &[
+            "link",
+            "add",
+            &vxlan,
+            "type",
+            "vxlan",
+            "id",
+            &vni.to_string(),
+            "dstport",
+            "4789",
+        ],
+    )
+    .await
+    {
+        Ok(o) => o,
+        Err(e) => {
+            tracing::warn!("failed to invoke `ip link add type vxlan` (is iproute2 installed?): {e}");
+            return false;
+        }
+    };
+    if !succeeded_or_already_exists(&add) {
+        tracing::warn!(
+            "could not create VXLAN device {vxlan} (likely missing root/CAP_NET_ADMIN): {}",
+            stderr_of(&add)
+        );
+        return false;
+    }
+
+    let master = match run("ip", &["link", "set", &vxlan, "master", bridge]).await {
+        Ok(o) => o,
+        Err(e) => {
+            tracing::warn!("failed to invoke `ip link set master`: {e}");
+            return false;
+        }
+    };
+    if !master.status.success() {
+        tracing::warn!(
+            "failed to attach {vxlan} to bridge {bridge}: {}",
+            stderr_of(&master)
+        );
+        return false;
+    }
+
+    match run("ip", &["link", "set", &vxlan, "up"]).await {
+        Ok(o) if o.status.success() => {}
+        Ok(o) => {
+            tracing::warn!("failed to bring up {vxlan}: {}", stderr_of(&o));
+            return false;
+        }
+        Err(e) => {
+            tracing::warn!("failed to invoke `ip link set up` for {vxlan}: {e}");
+            return false;
+        }
+    }
+
+    // Unicast head-end replication: without a multicast group, VXLAN needs
+    // an explicit forwarding-database entry per remote peer so broadcast/
+    // unknown-unicast/multicast traffic (ARP, in particular) is flooded to
+    // every other host in the overlay.
+    for peer in peers {
+        match run(
+            "bridge",
+            &["fdb", "append", "00:00:00:00:00:00", "dst", peer, "dev", &vxlan],
+        )
+        .await
+        {
+            Ok(o) if o.status.success() => {}
+            Ok(o) => tracing::warn!(
+                "failed to add VXLAN FDB entry for peer {peer} on {vxlan}: {}",
+                stderr_of(&o)
+            ),
+            Err(e) => tracing::warn!("failed to invoke `bridge fdb append` for peer {peer}: {e}"),
+        }
+    }
+
+    true
+}
+
+#[cfg(not(target_os = "linux"))]
+async fn attach_overlay_uplink(
+    _network_name: &str,
+    _bridge: &str,
+    _vni: u32,
+    _peers: &[String],
+) -> bool {
+    tracing::warn!("overlay networks require a real VXLAN device, which this platform doesn't support here");
+    false
+}
+
 /// Only Linux has real per-service network namespaces to attach to here
 /// (Origin's OCI/containerd runtime is Linux-only, see `runtime.rs`'s
 /// `cfg(target_os = "linux")` gates), so this is a no-op elsewhere — the
@@ -368,6 +595,8 @@ async fn attach_service_netns(
     _bridge: &str,
     _ip: &str,
     _prefix_len: u8,
+    _ipv6: &str,
+    _prefix6_len: u8,
     _pid: u32,
 ) -> Result<Option<String>> {
     Ok(None)
@@ -379,6 +608,8 @@ async fn attach_service_netns(
     bridge: &str,
     ip: &str,
     prefix_len: u8,
+    ipv6: &str,
+    prefix6_len: u8,
     pid: u32,
 ) -> Result<Option<String>> {
     let veth_host = veth_name_for(service_name);
@@ -440,6 +671,33 @@ async fn attach_service_netns(
         stderr_of(&addr)
     );
 
+    // IPv6 is best-effort: dual-stack is a nice-to-have, not a reason to
+    // fail a connect that already has working IPv4 connectivity.
+    if let Ok(addr6) = run(
+        "nsenter",
+        &[
+            "-t",
+            &pid_s,
+            "-n",
+            "ip",
+            "-6",
+            "addr",
+            "add",
+            &format!("{ipv6}/{prefix6_len}"),
+            "dev",
+            &veth_peer,
+        ],
+    )
+    .await
+    {
+        if !addr6.status.success() {
+            tracing::warn!(
+                "failed to assign IPv6 {ipv6}/{prefix6_len} to {veth_peer} inside netns of pid {pid}: {}",
+                stderr_of(&addr6)
+            );
+        }
+    }
+
     let ifup = run(
         "nsenter",
         &["-t", &pid_s, "-n", "ip", "link", "set", &veth_peer, "up"],
@@ -482,6 +740,29 @@ async fn teardown_veth(conn: &ConnectedService) {
 #[cfg(target_os = "linux")]
 async fn teardown_bridge(bridge: Option<&str>) {
     let Some(bridge) = bridge else { return };
+    // Deleting the bridge does not implicitly remove ports attached to it
+    // (the VXLAN device, if this was an overlay network); ports must be
+    // deleted explicitly or they're left as detached devices on the host.
+    let vxlan_prefix = "vx-";
+    if let Ok(links) = run("ip", &["-brief", "link", "show", "master", bridge]).await {
+        if links.status.success() {
+            for line in String::from_utf8_lossy(&links.stdout).lines() {
+                if let Some(name) = line.split_whitespace().next() {
+                    if name.starts_with(vxlan_prefix) {
+                        if let Ok(o) = run("ip", &["link", "delete", name]).await {
+                            if !o.status.success() {
+                                tracing::warn!(
+                                    "failed to delete VXLAN device {name}: {}",
+                                    stderr_of(&o)
+                                );
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
     match run("ip", &["link", "delete", bridge]).await {
         Ok(o) if o.status.success() => {}
         Ok(o) => tracing::warn!("failed to delete bridge {bridge}: {}", stderr_of(&o)),
@@ -501,6 +782,8 @@ async fn create_platform_bridge(
     network_name: &str,
     gateway: &str,
     prefix_len: u8,
+    gateway6: &str,
+    prefix6_len: u8,
 ) -> Option<String> {
     tracing::info!("Creating macOS bridge interface for network {network_name}");
 
@@ -531,6 +814,22 @@ async fn create_platform_bridge(
     .await;
     if !matches!(&addr, Ok(o) if o.status.success()) {
         tracing::warn!("failed to assign gateway address {gateway}/{prefix_len} to {name}");
+    }
+
+    // IPv6 gateway is best-effort, same reasoning as the Linux path.
+    let addr6 = run(
+        "ifconfig",
+        &[
+            &name,
+            "inet6",
+            gateway6,
+            "prefixlen",
+            &prefix6_len.to_string(),
+        ],
+    )
+    .await;
+    if !matches!(&addr6, Ok(o) if o.status.success()) {
+        tracing::warn!("failed to assign IPv6 gateway address {gateway6}/{prefix6_len} to {name}");
     }
 
     match run("ifconfig", &[&name, "up"]).await {
@@ -571,6 +870,8 @@ async fn create_platform_bridge(
     network_name: &str,
     gateway: &str,
     prefix_len: u8,
+    gateway6: &str,
+    prefix6_len: u8,
 ) -> Option<String> {
     let switch_name = format!("tpt-{network_name}");
     tracing::info!(
@@ -587,6 +888,11 @@ async fn create_platform_bridge(
          if (-not (Get-NetIPAddress -InterfaceIndex $ifIndex -IPAddress '{gateway}' -ErrorAction SilentlyContinue)) {{ \
            New-NetIPAddress -InterfaceIndex $ifIndex -IPAddress '{gateway}' -PrefixLength {prefix_len} | Out-Null \
          }}; \
+         try {{ \
+           if (-not (Get-NetIPAddress -InterfaceIndex $ifIndex -IPAddress '{gateway6}' -ErrorAction SilentlyContinue)) {{ \
+             New-NetIPAddress -InterfaceIndex $ifIndex -IPAddress '{gateway6}' -PrefixLength {prefix6_len} | Out-Null \
+           }} \
+         }} catch {{ }}; \
          Write-Output '{adapter_name}'"
     );
 
@@ -648,6 +954,8 @@ async fn create_platform_bridge(
     network_name: &str,
     _gateway: &str,
     _prefix_len: u8,
+    _gateway6: &str,
+    _prefix6_len: u8,
 ) -> Option<String> {
     tracing::warn!("no real networking support for this platform; network '{network_name}' is bookkeeping-only");
     None

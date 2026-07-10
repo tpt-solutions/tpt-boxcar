@@ -125,6 +125,7 @@ pub enum ServiceStatus {
     Stopped,
     Failed(String),
     HealthChecking,
+    Paused,
 }
 
 /// Store state for a Wasm service instance: just a WASI preview1 context,
@@ -326,25 +327,53 @@ impl RuntimeManager {
 
         let mut mounts = Vec::with_capacity(service.volumes.len());
         for v in &service.volumes {
-            let host_source = resolve_volume_source(&v.source)?;
-            mounts.push(crate::containerd::MountSpec {
-                host_source,
-                container_target: v.target.clone(),
-                read_only: v.read_only,
-            });
+            match v.mount_type {
+                crate::manifest::MountType::Tmpfs => {
+                    // Tmpfs mounts don't need a host source
+                    mounts.push(crate::containerd::MountSpec {
+                        host_source: String::new(),
+                        container_target: v.target.clone(),
+                        read_only: v.read_only,
+                        mount_type: crate::containerd::MountType::Tmpfs,
+                        tmpfs_options: v.tmpfs_options.clone(),
+                    });
+                }
+                crate::manifest::MountType::Volume => {
+                    let host_source = resolve_volume_source(&v.source)?;
+                    mounts.push(crate::containerd::MountSpec {
+                        host_source,
+                        container_target: v.target.clone(),
+                        read_only: v.read_only,
+                        mount_type: crate::containerd::MountType::Volume,
+                        tmpfs_options: None,
+                    });
+                }
+                crate::manifest::MountType::Bind => {
+                    let host_source = resolve_volume_source(&v.source)?;
+                    mounts.push(crate::containerd::MountSpec {
+                        host_source,
+                        container_target: v.target.clone(),
+                        read_only: v.read_only,
+                        mount_type: crate::containerd::MountType::Bind,
+                        tmpfs_options: None,
+                    });
+                }
+            }
         }
 
         // Mount secrets as read-only bind mounts
         if let Some(secrets) = &service.secrets {
             for secret in secrets {
                 let source = envfile::resolve_secret_source(
-                    &secret.source,
+                    secret.source.as_deref().unwrap_or_else(|| std::path::Path::new(".")),
                     std::path::Path::new("."),
                 )?;
                 mounts.push(crate::containerd::MountSpec {
                     host_source: source.to_string_lossy().to_string(),
                     container_target: secret.target.clone(),
                     read_only: true,
+                    mount_type: crate::containerd::MountType::Bind,
+                    tmpfs_options: None,
                 });
             }
         }
@@ -437,7 +466,7 @@ impl RuntimeManager {
         if let Some(secrets) = &service.secrets {
             for secret in secrets {
                 let source = envfile::resolve_secret_source(
-                    &secret.source,
+                    secret.source.as_deref().unwrap_or_else(|| std::path::Path::new(".")),
                     std::path::Path::new("."),
                 )?;
                 match envfile::read_secret(&source) {
@@ -560,7 +589,7 @@ impl RuntimeManager {
         if let Some(secrets) = &service.secrets {
             for secret in secrets {
                 let source = envfile::resolve_secret_source(
-                    &secret.source,
+                    secret.source.as_deref().unwrap_or_else(|| std::path::Path::new(".")),
                     std::path::Path::new("."),
                 )?;
                 match envfile::read_secret(&source) {
@@ -692,6 +721,76 @@ impl RuntimeManager {
         Ok(())
     }
 
+    /// Pauses a running service using cgroup freezer (Linux) or SIGSTOP (process).
+    /// The service's CPU and memory usage will be frozen until unpaused.
+    pub async fn pause_service(&mut self, name: &str) -> Result<()> {
+        if let Some(svc) = self.services.get_mut(name) {
+            tracing::info!("Pausing service: {name}");
+
+            // For process services, send SIGSTOP
+            #[cfg(unix)]
+            if let Some(_child) = svc.child.as_mut() {
+                use libc::{kill, SIGSTOP};
+                if let Some(pid) = _child.id() {
+                    unsafe {
+                        kill(pid as i32, SIGSTOP);
+                    }
+                }
+            }
+            #[cfg(not(unix))]
+            {
+                // On Windows, we can use SuspendThread but it's not portable
+                tracing::warn!("pause not fully supported on this platform for process services");
+            }
+
+            // For OCI containers, use containerd's pause task
+            #[cfg(all(target_os = "linux", feature = "containerd"))]
+            if let Some(container_id) = svc.containerd_container_id.clone() {
+                if let Some(client) = self.containerd.as_ref() {
+                    if let Err(e) = client.pause_container(&container_id).await {
+                        tracing::warn!("failed to pause containerd container '{container_id}': {e}");
+                    }
+                }
+            }
+
+            svc.status = ServiceStatus::Paused;
+        }
+        Ok(())
+    }
+
+    /// Unpauses a paused service.
+    pub async fn unpause_service(&mut self, name: &str) -> Result<()> {
+        if let Some(svc) = self.services.get_mut(name) {
+            tracing::info!("Unpausing service: {name}");
+
+            // For process services, send SIGCONT
+            #[cfg(unix)]
+            if let Some(_child) = svc.child.as_mut() {
+                use libc::{kill, SIGCONT};
+                if let Some(pid) = _child.id() {
+                    unsafe {
+                        kill(pid as i32, SIGCONT);
+                    }
+                }
+            }
+
+            // For OCI containers, use containerd's unpause task
+            #[cfg(all(target_os = "linux", feature = "containerd"))]
+            if let Some(container_id) = svc.containerd_container_id.clone() {
+                if let Some(client) = self.containerd.as_ref() {
+                    if let Err(e) = client.unpause_container(&container_id).await {
+                        tracing::warn!(
+                            "failed to unpause containerd container '{container_id}': {e}"
+                        );
+                    }
+                }
+            }
+
+            svc.status = ServiceStatus::Running;
+        }
+        Ok(())
+    }
+
     /// Checks each running service for an exit its manifest didn't ask for
     /// and, if `restart_policy` allows it, actually restarts it — real
     /// crash recovery, unlike before where a crashed service just silently
@@ -781,91 +880,228 @@ impl RuntimeManager {
         None
     }
 
-    /// Polls `OCIService.healthcheck` for every running OCI service whose
-    /// `interval_secs` has elapsed since its last probe, actually exec'ing
-    /// the configured command inside the container (not just checking
-    /// whether the top-level task process is alive) and driving
+    /// Polls healthchecks for every running service whose `interval_secs`
+    /// has elapsed since its last probe. For OCI services, execs the
+    /// configured command inside the container. For process services,
+    /// runs HTTP/TCP/exec probes against the service. Drives
     /// `RunningService.status` through `HealthChecking` to `Failed` after
-    /// `retries` consecutive failures. Poll-based like `reap_and_restart`
-    /// (intended to be called periodically from a supervising loop).
-    /// Returns the names of services that just transitioned to `Failed`
-    /// because of a healthcheck (as opposed to a process/task exit, which
-    /// `reap_and_restart` handles separately).
+    /// `retries` consecutive failures.
     pub async fn poll_healthchecks(&mut self, manifest: &Manifest) -> Result<Vec<String>> {
-        #[cfg_attr(
-            not(all(target_os = "linux", feature = "containerd")),
-            allow(unused_mut)
-        )]
         let mut newly_failed = Vec::new();
+        let names: Vec<String> = self.services.keys().cloned().collect();
 
-        #[cfg(all(target_os = "linux", feature = "containerd"))]
-        {
-            let names: Vec<String> = self.services.keys().cloned().collect();
-            for name in names {
-                let Some(Service::OCI(oci)) = manifest.services.get(&name) else {
-                    continue;
-                };
-                let Some(healthcheck) = &oci.healthcheck else {
-                    continue;
-                };
+        for name in names {
+            let service = match manifest.services.get(&name) {
+                Some(s) => s,
+                None => continue,
+            };
+            let healthcheck = match service {
+                Service::OCI(oci) => oci.healthcheck.as_ref(),
+                Service::Wasm(wasm) => wasm.healthcheck.as_ref(),
+                Service::Process(process) => process.healthcheck.as_ref(),
+            };
+            let Some(healthcheck) = healthcheck else {
+                continue;
+            };
 
-                let due = self.services.get(&name).is_some_and(|svc| {
-                    svc.last_health_check
-                        .map(|t| {
-                            t.elapsed() >= std::time::Duration::from_secs(healthcheck.interval_secs)
-                        })
-                        .unwrap_or(true)
-                });
-                if !due {
-                    continue;
+            let due = self.services.get(&name).is_some_and(|svc| {
+                svc.last_health_check
+                    .map(|t| {
+                        t.elapsed() >= std::time::Duration::from_secs(healthcheck.interval_secs)
+                    })
+                    .unwrap_or(true)
+            });
+            if !due {
+                continue;
+            }
+
+            let healthy = match service {
+                Service::OCI(oci) => {
+                    self.run_oci_healthcheck(&name, oci, healthcheck).await
                 }
+                Service::Process(process) => {
+                    self.run_process_healthcheck(&name, process, healthcheck)
+                        .await
+                }
+                Service::Wasm(wasm) => {
+                    self.run_wasm_healthcheck(&name, wasm, healthcheck).await
+                }
+            };
 
+            if let Some(svc) = self.services.get_mut(&name) {
+                svc.last_health_check = Some(std::time::Instant::now());
+                if healthy {
+                    svc.health_failures = 0;
+                    if matches!(svc.status, ServiceStatus::HealthChecking) {
+                        svc.status = ServiceStatus::Running;
+                    }
+                } else {
+                    svc.health_failures += 1;
+                    if svc.health_failures >= healthcheck.retries {
+                        svc.status = ServiceStatus::Failed(format!(
+                            "healthcheck failed {} consecutive times",
+                            svc.health_failures
+                        ));
+                        newly_failed.push(name.clone());
+                    } else {
+                        svc.status = ServiceStatus::HealthChecking;
+                    }
+                }
+            }
+        }
+
+        Ok(newly_failed)
+    }
+
+    #[cfg(all(target_os = "linux", feature = "containerd"))]
+    async fn run_oci_healthcheck(
+        &self,
+        name: &str,
+        oci: &OCIService,
+        healthcheck: &crate::manifest::HealthCheck,
+    ) -> bool {
+        use crate::manifest::CheckType;
+
+        match healthcheck.check_type {
+            CheckType::Exec => {
                 let Some(container_id) = self
                     .services
-                    .get(&name)
+                    .get(name)
                     .and_then(|s| s.containerd_container_id.clone())
                 else {
-                    continue;
+                    return false;
                 };
                 let Some(client) = self.containerd.as_ref() else {
-                    continue;
+                    return false;
                 };
-
-                let healthy = client
+                client
                     .exec_healthcheck(
                         &container_id,
                         &healthcheck.command,
                         std::time::Duration::from_secs(healthcheck.timeout_secs),
                     )
                     .await
-                    .unwrap_or(false);
-
-                if let Some(svc) = self.services.get_mut(&name) {
-                    svc.last_health_check = Some(std::time::Instant::now());
-                    if healthy {
-                        svc.health_failures = 0;
-                        if matches!(svc.status, ServiceStatus::HealthChecking) {
-                            svc.status = ServiceStatus::Running;
-                        }
-                    } else {
-                        svc.health_failures += 1;
-                        if svc.health_failures >= healthcheck.retries {
-                            svc.status = ServiceStatus::Failed(format!(
-                                "healthcheck failed {} consecutive times",
-                                svc.health_failures
-                            ));
-                            newly_failed.push(name.clone());
-                        } else {
-                            svc.status = ServiceStatus::HealthChecking;
-                        }
-                    }
-                }
+                    .unwrap_or(false)
+            }
+            CheckType::Http => {
+                self.run_http_healthcheck(healthcheck).await
+            }
+            CheckType::Tcp => {
+                self.run_tcp_healthcheck(healthcheck).await
             }
         }
-        #[cfg(not(all(target_os = "linux", feature = "containerd")))]
-        let _ = manifest;
+    }
 
-        Ok(newly_failed)
+    #[cfg(not(all(target_os = "linux", feature = "containerd")))]
+    async fn run_oci_healthcheck(
+        &self,
+        _name: &str,
+        _oci: &OCIService,
+        _healthcheck: &crate::manifest::HealthCheck,
+    ) -> bool {
+        false
+    }
+
+    async fn run_process_healthcheck(
+        &self,
+        _name: &str,
+        _process: &ProcessService,
+        healthcheck: &crate::manifest::HealthCheck,
+    ) -> bool {
+        use crate::manifest::CheckType;
+
+        match healthcheck.check_type {
+            CheckType::Exec => {
+                let Some(program) = healthcheck.command.first() else {
+                    return false;
+                };
+                let args = &healthcheck.command[1..];
+                let result = tokio::process::Command::new(program)
+                    .args(args)
+                    .output()
+                    .await;
+                match result {
+                    Ok(output) => output.status.success(),
+                    Err(_) => false,
+                }
+            }
+            CheckType::Http => self.run_http_healthcheck(healthcheck).await,
+            CheckType::Tcp => self.run_tcp_healthcheck(healthcheck).await,
+        }
+    }
+
+    async fn run_wasm_healthcheck(
+        &self,
+        _name: &str,
+        _wasm: &WasmService,
+        healthcheck: &crate::manifest::HealthCheck,
+    ) -> bool {
+        use crate::manifest::CheckType;
+
+        match healthcheck.check_type {
+            CheckType::Exec => {
+                let Some(program) = healthcheck.command.first() else {
+                    return false;
+                };
+                let args = &healthcheck.command[1..];
+                let result = tokio::process::Command::new(program)
+                    .args(args)
+                    .output()
+                    .await;
+                match result {
+                    Ok(output) => output.status.success(),
+                    Err(_) => false,
+                }
+            }
+            CheckType::Http => self.run_http_healthcheck(healthcheck).await,
+            CheckType::Tcp => self.run_tcp_healthcheck(healthcheck).await,
+        }
+    }
+
+    async fn run_http_healthcheck(
+        &self,
+        healthcheck: &crate::manifest::HealthCheck,
+    ) -> bool {
+        let port = match healthcheck.port {
+            Some(p) => p,
+            None => return false,
+        };
+        let path = healthcheck.path.as_deref().unwrap_or("/");
+        let url = format!("http://127.0.0.1:{port}{path}");
+        let timeout = std::time::Duration::from_secs(healthcheck.timeout_secs);
+
+        // ureq is synchronous, so spawn_blocking to avoid blocking the async runtime
+        match tokio::task::spawn_blocking(move || {
+            match ureq::get(&url).timeout(timeout).call() {
+                Ok(response) => {
+                    let status = response.status();
+                    (200..400).contains(&status)
+                }
+                Err(_) => false,
+            }
+        })
+        .await
+        {
+            Ok(result) => result,
+            Err(_) => false,
+        }
+    }
+
+    async fn run_tcp_healthcheck(
+        &self,
+        healthcheck: &crate::manifest::HealthCheck,
+    ) -> bool {
+        let port = match healthcheck.port {
+            Some(p) => p,
+            None => return false,
+        };
+        let timeout = std::time::Duration::from_secs(healthcheck.timeout_secs);
+        let addr = format!("127.0.0.1:{port}");
+
+        match tokio::time::timeout(timeout, tokio::net::TcpStream::connect(&addr)).await {
+            Ok(Ok(_)) => true,
+            _ => false,
+        }
     }
 
     pub fn get_status(&self, name: &str) -> Option<&ServiceStatus> {
@@ -918,6 +1154,10 @@ mod tests {
             secrets: None,
             security: None,
             logging: None,
+            healthcheck: None,
+            profiles: vec![],
+            configs: None,
+            extends: None,
         }
     }
 
@@ -1109,6 +1349,10 @@ mod tests {
             secrets: None,
             security: None,
             logging: None,
+            healthcheck: None,
+            profiles: vec![],
+            configs: None,
+            extends: None,
         });
         let mut services = HashMap::new();
         services.insert("flaky".to_string(), service.clone());
@@ -1119,6 +1363,8 @@ mod tests {
             networks: HashMap::new(),
             volumes: HashMap::new(),
             logging: None,
+            configs: HashMap::new(),
+            secrets: HashMap::new(),
         };
 
         manager
@@ -1170,6 +1416,10 @@ mod tests {
             secrets: None,
             security: None,
             logging: None,
+            healthcheck: None,
+            profiles: vec![],
+            configs: None,
+            extends: None,
         });
         let mut services = HashMap::new();
         services.insert("one-shot".to_string(), service.clone());
@@ -1180,6 +1430,8 @@ mod tests {
             networks: HashMap::new(),
             volumes: HashMap::new(),
             logging: None,
+            configs: HashMap::new(),
+            secrets: HashMap::new(),
         };
 
         manager

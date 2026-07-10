@@ -1,5 +1,6 @@
 use anyhow::Context;
 use clap::{Parser, Subcommand};
+use std::collections::HashMap;
 use std::path::PathBuf;
 
 mod state;
@@ -63,6 +64,14 @@ enum OriginCommands {
         /// be installed.
         #[arg(long)]
         rootless: bool,
+        /// Profiles to activate (comma-separated). Only services with matching
+        /// profiles (or no profile restriction) will be started.
+        #[arg(short, long)]
+        profiles: Option<String>,
+        /// Environment variable overrides (KEY=VALUE). Can be specified
+        /// multiple times. Used for variable interpolation in manifests.
+        #[arg(short = 'E', long = "env")]
+        env_overrides: Vec<String>,
     },
     /// Tear down all running services
     Down,
@@ -131,6 +140,62 @@ enum OriginCommands {
         #[arg(short, long)]
         follow: bool,
     },
+    /// List locally stored OCI images
+    Images {
+        /// Filter by image name or reference
+        #[arg(long)]
+        filter: Option<String>,
+    },
+    /// Remove a locally stored OCI image
+    Rmi {
+        /// Image reference to remove
+        image: String,
+    },
+    /// Pull an OCI image from a registry
+    Pull {
+        /// Image reference to pull (e.g. "postgres:16")
+        image: String,
+    },
+    /// Push a built OCI image to a registry
+    Push {
+        /// Image reference to push (e.g. "ghcr.io/myorg/myimage:latest")
+        image: String,
+        /// Path to Docker config.json for registry credentials
+        #[arg(long)]
+        config: Option<PathBuf>,
+    },
+    /// Show real-time lifecycle events (like `docker events`)
+    Events {
+        /// Path to manifest file
+        #[arg(short, long, default_value = "manifest.yaml")]
+        manifest: PathBuf,
+        /// Filter by event type (e.g. "start", "stop", "health")
+        #[arg(short, long)]
+        filter: Option<String>,
+        /// Filter by service name
+        #[arg(short, long)]
+        service: Option<String>,
+        /// Output as JSON instead of human-readable format
+        #[arg(long)]
+        json: bool,
+    },
+    /// Copy files to/from containers (like `docker cp`)
+    Cp {
+        /// Source path (container:path or host:path)
+        source: String,
+        /// Destination path (container:path or host:path)
+        destination: String,
+    },
+    /// Pause a running service (freezes CPU and memory)
+    Pause {
+        /// Service name to pause
+        service: String,
+    },
+    /// Unpause a paused service (resumes execution)
+    Unpause {
+        /// Service name to unpause
+        service: String,
+    },
 }
 
 #[tokio::main]
@@ -147,7 +212,17 @@ async fn main() -> anyhow::Result<()> {
     match cli.command {
         Commands::Origin { command } => match command {
             OriginCommands::Init { dir } => cmd_init(&dir).await,
-            OriginCommands::Up { manifest, watch, rootless } => cmd_up(&manifest, watch, rootless).await,
+            OriginCommands::Up { manifest, watch, rootless, profiles, env_overrides } => {
+                let profile_list = profiles
+                    .as_deref()
+                    .map(|p| p.split(',').map(|s| s.trim().to_string()).collect::<Vec<_>>())
+                    .unwrap_or_default();
+                let env_map = env_overrides
+                    .iter()
+                    .filter_map(|e| e.split_once('=').map(|(k, v)| (k.to_string(), v.to_string())))
+                    .collect();
+                cmd_up(&manifest, watch, rootless, &profile_list, &env_map).await
+            },
             OriginCommands::Down => cmd_down().await,
             OriginCommands::Ps => cmd_ps().await,
             OriginCommands::Logs { service, follow } => cmd_logs(&service, follow).await,
@@ -169,8 +244,22 @@ async fn main() -> anyhow::Result<()> {
                 json,
             } => cmd_inspect(&service, &manifest, json).await,
             OriginCommands::Stats { manifest, follow } => cmd_stats(&manifest, follow).await,
+            OriginCommands::Images { filter } => cmd_images(filter.as_deref()).await,
+            OriginCommands::Rmi { image } => cmd_rmi(&image).await,
+            OriginCommands::Pull { image } => cmd_pull(&image).await,
+            OriginCommands::Push { image, config } => cmd_push(&image, config.as_ref()).await,
+            OriginCommands::Events { manifest, filter, service, json } => {
+                cmd_events(&manifest, filter.as_deref(), service.as_deref(), json).await
+            },
+            OriginCommands::Cp { source, destination } => cmd_cp(&source, &destination).await,
+            OriginCommands::Pause { service } => cmd_pause(&service).await,
+            OriginCommands::Unpause { service } => cmd_unpause(&service).await,
         },
-        Commands::Up { manifest } => cmd_up(&manifest, false, false).await,
+        Commands::Up { manifest } => {
+            let empty_profiles = Vec::new();
+            let empty_env = HashMap::new();
+            cmd_up(&manifest, false, false, &empty_profiles, &empty_env).await
+        },
         Commands::Down => cmd_down().await,
     }
 }
@@ -188,13 +277,28 @@ async fn cmd_init(dir: &PathBuf) -> anyhow::Result<()> {
     Ok(())
 }
 
-async fn cmd_up(manifest_path: &PathBuf, watch: bool, rootless: bool) -> anyhow::Result<()> {
+async fn cmd_up(manifest_path: &PathBuf, watch: bool, rootless: bool, profiles: &[String], env_overrides: &HashMap<String, String>) -> anyhow::Result<()> {
     if !manifest_path.exists() {
         anyhow::bail!("Manifest not found: {}", manifest_path.display());
     }
 
     let content = std::fs::read_to_string(manifest_path)?;
-    let manifest: tpt_origin_core::manifest::Manifest = serde_yaml::from_str(&content)?;
+    let mut manifest: tpt_origin_core::manifest::Manifest = serde_yaml::from_str(&content)?;
+
+    // Resolve extends
+    manifest = tpt_origin_core::manifest::resolve_extends(&manifest)
+        .map_err(|e| anyhow::anyhow!("failed to resolve extends: {e}"))?;
+
+    // Filter by profiles
+    if !profiles.is_empty() {
+        manifest = tpt_origin_core::manifest::filter_by_profiles(&manifest, profiles);
+    }
+
+    // Interpolate environment variables in service configurations
+    let system_env: HashMap<String, String> = std::env::vars().collect();
+    for (_name, service) in manifest.services.iter_mut() {
+        interpolate_service_env(service, &system_env, env_overrides);
+    }
 
     if rootless {
         println!("Running in rootless mode");
@@ -486,6 +590,43 @@ fn chrono_now() -> String {
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap_or_default();
     format!("{}", now.as_secs())
+}
+
+/// Interpolates environment variables in a service's configuration fields.
+fn interpolate_service_env(
+    service: &mut tpt_origin_core::manifest::Service,
+    env: &HashMap<String, String>,
+    overrides: &HashMap<String, String>,
+) {
+    match service {
+        tpt_origin_core::manifest::Service::OCI(oci) => {
+            oci.image = tpt_origin_core::manifest::interpolate_env(&oci.image, env, overrides);
+            for v in &mut oci.volumes {
+                v.source = tpt_origin_core::manifest::interpolate_env(&v.source, env, overrides);
+                v.target = tpt_origin_core::manifest::interpolate_env(&v.target, env, overrides);
+            }
+            for _port in &mut oci.ports {
+                // Port mappings are numeric, skip interpolation
+            }
+        }
+        tpt_origin_core::manifest::Service::Wasm(wasm) => {
+            let path_str = wasm.path.to_string_lossy().to_string();
+            let interpolated = tpt_origin_core::manifest::interpolate_env(&path_str, env, overrides);
+            wasm.path = std::path::PathBuf::from(interpolated);
+        }
+        tpt_origin_core::manifest::Service::Process(process) => {
+            for arg in &mut process.command {
+                *arg = tpt_origin_core::manifest::interpolate_env(arg, env, overrides);
+            }
+        }
+    }
+
+    // Interpolate environment values themselves
+    let env_map = service.environment_mut().clone();
+    for (key, value) in env_map {
+        let interpolated = tpt_origin_core::manifest::interpolate_env(&value, env, overrides);
+        service.environment_mut().insert(key, interpolated);
+    }
 }
 
 async fn cmd_down() -> anyhow::Result<()> {
@@ -1093,6 +1234,334 @@ fn print_stats_table(stats: &[tpt_origin_core::stats::ServiceStats]) {
     }
 }
 
+async fn cmd_images(filter: Option<&str>) -> anyhow::Result<()> {
+    let socket = std::env::var("ORIGIN_CONTAINERD_SOCKET")
+        .unwrap_or_else(|_| "/run/containerd/containerd.sock".to_string());
+    let namespace = "tpt-boxcar";
+
+    let mut args: Vec<String> = vec![
+        "--address".into(),
+        socket,
+        "--namespace".into(),
+        namespace.into(),
+        "images".into(),
+        "list".into(),
+    ];
+
+    if let Some(f) = filter {
+        args.push(format!("name~={f}"));
+    }
+
+    let output = tokio::process::Command::new("ctr")
+        .args(&args)
+        .output()
+        .await
+        .context("failed to spawn `ctr images list` (is containerd's `ctr` CLI installed?)")?;
+
+    if !output.status.success() {
+        anyhow::bail!(
+            "failed to list images: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    if stdout.trim().is_empty() {
+        println!("No images found. Build or pull an image first.");
+    } else {
+        println!("REPOSITORY    TAG    IMAGE ID    SIZE");
+        println!("------------    ---    --------    ----");
+        for line in stdout.lines() {
+            let trimmed = line.trim();
+            if !trimmed.is_empty() {
+                println!("  {trimmed}");
+            }
+        }
+    }
+
+    Ok(())
+}
+
+async fn cmd_rmi(image: &str) -> anyhow::Result<()> {
+    let socket = std::env::var("ORIGIN_CONTAINERD_SOCKET")
+        .unwrap_or_else(|_| "/run/containerd/containerd.sock".to_string());
+    let namespace = "tpt-boxcar";
+
+    // Normalize the image reference
+    let image_ref = normalize_image_ref_cli(image);
+
+    println!("Removing image: {image_ref}");
+
+    let output = tokio::process::Command::new("ctr")
+        .args([
+            "--address",
+            &socket,
+            "--namespace",
+            namespace,
+            "images",
+            "remove",
+            &image_ref,
+        ])
+        .output()
+        .await
+        .context("failed to spawn `ctr images remove` (is containerd's `ctr` CLI installed?)")?;
+
+    if !output.status.success() {
+        anyhow::bail!(
+            "failed to remove image '{image_ref}': {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+
+    println!("Removed: {image_ref}");
+    Ok(())
+}
+
+async fn cmd_pull(image: &str) -> anyhow::Result<()> {
+    let socket = std::env::var("ORIGIN_CONTAINERD_SOCKET")
+        .unwrap_or_else(|_| "/run/containerd/containerd.sock".to_string());
+    let namespace = "tpt-boxcar";
+
+    let image_ref = normalize_image_ref_cli(image);
+
+    println!("Pulling: {image_ref}");
+
+    let output = tokio::process::Command::new("ctr")
+        .args([
+            "--address",
+            &socket,
+            "--namespace",
+            namespace,
+            "images",
+            "pull",
+            &image_ref,
+        ])
+        .output()
+        .await
+        .context("failed to spawn `ctr images pull` (is containerd's `ctr` CLI installed?)")?;
+
+    if !output.status.success() {
+        anyhow::bail!(
+            "failed to pull image '{image_ref}': {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+
+    println!("Pulled: {image_ref}");
+    Ok(())
+}
+
+async fn cmd_push(image: &str, config_path: Option<&PathBuf>) -> anyhow::Result<()> {
+    let socket = std::env::var("ORIGIN_CONTAINERD_SOCKET")
+        .unwrap_or_else(|_| "/run/containerd/containerd.sock".to_string());
+    let namespace = "tpt-boxcar";
+
+    let image_ref = normalize_image_ref_cli(image);
+
+    // Check if the image exists locally
+    let list_output = tokio::process::Command::new("ctr")
+        .args([
+            "--address",
+            &socket,
+            "--namespace",
+            namespace,
+            "images",
+            "list",
+            &format!("name=={image_ref}"),
+        ])
+        .output()
+        .await
+        .context("failed to list images")?;
+
+    if !list_output.status.success() || String::from_utf8_lossy(&list_output.stdout).trim().is_empty() {
+        anyhow::bail!(
+            "image '{image_ref}' not found locally. Build it first with `tpt origin build`."
+        );
+    }
+
+    // Build the push command
+    let mut args: Vec<String> = vec![
+        "--address".into(),
+        socket,
+        "--namespace".into(),
+        namespace.into(),
+        "images".into(),
+        "push".into(),
+    ];
+
+    // Handle authentication via Docker config.json
+    let effective_config = config_path
+        .map(|p| p.to_path_buf())
+        .or_else(|| {
+            let home = std::env::var("HOME").ok().or_else(|| {
+                #[cfg(windows)]
+                {
+                    std::env::var("USERPROFILE").ok()
+                }
+                #[cfg(not(windows))]
+                {
+                    None
+                }
+            });
+            home.map(|h| PathBuf::from(h).join(".docker/config.json"))
+                .filter(|p| p.exists())
+        });
+
+    if let Some(config) = effective_config {
+        if let Ok(auth_token) = extract_docker_token(&image_ref, &config) {
+            args.push("--user".into());
+            args.push(auth_token);
+        }
+    }
+
+    args.push(image_ref.clone());
+
+    println!("Pushing: {image_ref}");
+
+    let output = tokio::process::Command::new("ctr")
+        .args(&args)
+        .output()
+        .await
+        .context("failed to spawn `ctr images push` (is containerd's `ctr` CLI installed?)")?;
+
+    if !output.status.success() {
+        anyhow::bail!(
+            "failed to push image '{image_ref}': {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+
+    println!("Pushed: {image_ref}");
+    Ok(())
+}
+
+/// Extracts auth credentials from Docker's config.json for a given registry.
+/// Returns a "user:pass" string suitable for `ctr --user`.
+fn extract_docker_token(image_ref: &str, config_path: &PathBuf) -> anyhow::Result<String> {
+    let config_str = std::fs::read_to_string(config_path)
+        .with_context(|| format!("failed to read Docker config: {}", config_path.display()))?;
+    let config: serde_json::Value = serde_json::from_str(&config_str)
+        .with_context(|| format!("failed to parse Docker config: {}", config_path.display()))?;
+
+    // Extract registry host from image reference
+    let registry_host = extract_registry_host(image_ref);
+
+    // Try auths[registry].auth (base64 encoded "user:pass")
+    if let Some(auths) = config.get("auths") {
+        if let Some(registry_config) = auths.get(&registry_host) {
+            if let Some(auth) = registry_config.get("auth").and_then(|v| v.as_str()) {
+                let decoded = base64_decode(auth)?;
+                return Ok(decoded);
+            }
+            // Try identitytoken
+            if let Some(token) = registry_config.get("identitytoken").and_then(|v| v.as_str()) {
+                if !token.is_empty() {
+                    return Ok(token.to_string());
+                }
+            }
+        }
+    }
+
+    // Try credsStore
+    if let Some(creds_store) = config.get("credsStore").and_then(|v| v.as_str()) {
+        return get_credential_from_store(&registry_host, creds_store);
+    }
+
+    anyhow::bail!(
+        "no credentials found for registry '{registry_host}' in {}",
+        config_path.display()
+    )
+}
+
+/// Extracts the registry host from an image reference.
+/// e.g. "ghcr.io/org/image:tag" -> "ghcr.io"
+///      "docker.io/library/alpine" -> "docker.io"
+fn extract_registry_host(image_ref: &str) -> String {
+    if !image_ref.contains('/') {
+        return "docker.io".to_string();
+    }
+
+    let first_segment = image_ref.split('/').next().unwrap();
+    if first_segment == "localhost" || first_segment.contains('.') || first_segment.contains(':') {
+        first_segment.to_string()
+    } else {
+        "docker.io".to_string()
+    }
+}
+
+/// Simple base64 decoding for Docker auth tokens.
+fn base64_decode(encoded: &str) -> anyhow::Result<String> {
+    use base64::Engine;
+    let decoded = base64::engine::general_purpose::STANDARD
+        .decode(encoded)
+        .context("failed to decode base64 auth token")?;
+    String::from_utf8(decoded).context("decoded auth token is not valid UTF-8")
+}
+
+/// Queries a credential helper store for registry credentials.
+fn get_credential_from_store(registry: &str, store: &str) -> anyhow::Result<String> {
+    let store_cmd = match store {
+        "desktop" => "docker-credential-desktop",
+        "wincred" => "docker-credential-wincred",
+        "osxkeychain" => "docker-credential-osxkeychain",
+        _ => return Err(anyhow::anyhow!("unsupported credential store: {store}")),
+    };
+
+    let output = std::process::Command::new(store_cmd)
+        .arg("get")
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .and_then(|mut child| {
+            use std::io::Write;
+            if let Some(mut stdin) = child.stdin.take() {
+                write!(stdin, "{registry}")?;
+            }
+            child.wait_with_output()
+        })
+        .context(format!("failed to run credential helper: {store_cmd}"))?;
+
+    if !output.status.success() {
+        anyhow::bail!(
+            "credential helper failed for '{registry}': {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+
+    let response: serde_json::Value = serde_json::from_slice(&output.stdout)
+        .context("failed to parse credential helper response")?;
+
+    let username = response
+        .get("Username")
+        .and_then(|v| v.as_str())
+        .unwrap_or("<token>");
+    let secret = response
+        .get("Secret")
+        .and_then(|v| v.as_str())
+        .context("credential helper response missing Secret")?;
+
+    Ok(format!("{username}:{secret}"))
+}
+
+/// Normalizes a bare image name to a fully qualified Docker Hub reference,
+/// mirroring `containerd::normalize_image_ref` for CLI use.
+fn normalize_image_ref_cli(image_ref: &str) -> String {
+    if !image_ref.contains('/') {
+        return format!("docker.io/library/{image_ref}");
+    }
+
+    let first_segment = image_ref.split('/').next().unwrap();
+    let has_registry_host =
+        first_segment == "localhost" || first_segment.contains('.') || first_segment.contains(':');
+
+    if has_registry_host {
+        image_ref.to_string()
+    } else {
+        format!("docker.io/{image_ref}")
+    }
+}
+
 #[cfg(target_os = "linux")]
 async fn cmd_build(
     dockerfile_path: &PathBuf,
@@ -1187,4 +1656,442 @@ async fn cmd_build(
         "tpt origin build requires Linux with containerd — \
          this platform is not supported for image building"
     )
+}
+
+async fn cmd_events(
+    manifest_path: &PathBuf,
+    filter: Option<&str>,
+    service_filter: Option<&str>,
+    json_output: bool,
+) -> anyhow::Result<()> {
+    if !manifest_path.exists() {
+        anyhow::bail!("Manifest not found: {}", manifest_path.display());
+    }
+
+    let content = std::fs::read_to_string(manifest_path)?;
+    let manifest: tpt_origin_core::manifest::Manifest = serde_yaml::from_str(&content)?;
+
+    let origin = tpt_origin_core::Origin::new(&manifest);
+    let mut rx = origin.event_bus().subscribe();
+
+    println!("Listening for lifecycle events... (Ctrl+C to stop)\n");
+
+    loop {
+        tokio::select! {
+            _ = tokio::signal::ctrl_c() => {
+                println!("\nStopped listening for events.");
+                break;
+            }
+            Ok(event) = rx.recv() => {
+                // Apply filters
+                if let Some(f) = filter {
+                    let event_type_str = format!("{:?}", event.event_type).to_lowercase();
+                    if !event_type_str.contains(f) {
+                        continue;
+                    }
+                }
+                if let Some(s) = service_filter {
+                    if event.service != s {
+                        continue;
+                    }
+                }
+
+                if json_output {
+                    println!("{}", serde_json::to_string(&event)?);
+                } else {
+                    let timestamp = chrono_timestamp(event.timestamp_ms);
+                    let event_type = format!("{:?}", event.event_type);
+                    let detail = match &event.detail {
+                        tpt_origin_core::lifecycle::EventDetail::None => String::new(),
+                        tpt_origin_core::lifecycle::EventDetail::Failure(msg) => format!(" ({msg})"),
+                        tpt_origin_core::lifecycle::EventDetail::HealthRetries(n) => format!(" (retry {n})"),
+                        tpt_origin_core::lifecycle::EventDetail::Network(name) => format!(" ({name})"),
+                        tpt_origin_core::lifecycle::EventDetail::Port(host, container) => format!(" ({host}:{container})"),
+                        tpt_origin_core::lifecycle::EventDetail::StatusChange(from, to) => format!(" ({from:?} -> {to:?})"),
+                    };
+                    let service_name = &event.service;
+                    println!("[{timestamp}] {event_type} {service_name}{detail}");
+                }
+            }
+        }
+    }
+
+    Ok(())
+}
+
+/// Converts Unix-epoch milliseconds to a human-readable timestamp.
+fn chrono_timestamp(ms: u64) -> String {
+    let secs = ms / 1000;
+    let millis = ms % 1000;
+    let datetime = std::time::UNIX_EPOCH + std::time::Duration::from_secs(secs);
+    let elapsed = datetime
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default();
+    let total_secs = elapsed.as_secs();
+    let hours = (total_secs / 3600) % 24;
+    let minutes = (total_secs / 60) % 60;
+    let seconds = total_secs % 60;
+    format!("{hours:02}:{minutes:02}:{seconds:02}.{millis:03}")
+}
+
+/// Copies files to/from containers using `ctr tasks exec` with tar pipes.
+/// Format: `container:path` for container paths, plain paths for host.
+async fn cmd_cp(source: &str, destination: &str) -> anyhow::Result<()> {
+    let (src_container, src_path) = parse_cp_path(source);
+    let (dst_container, dst_path) = parse_cp_path(destination);
+
+    match (src_container, dst_container) {
+        // Host -> Container
+        (None, Some(container_id)) => {
+            copy_to_container(&container_id, &src_path, &dst_path).await?;
+        }
+        // Container -> Host
+        (Some(container_id), None) => {
+            copy_from_container(&container_id, &src_path, &dst_path).await?;
+        }
+        // Container -> Container
+        (Some(_), Some(_)) => {
+            anyhow::bail!("container-to-container copy is not supported; copy via host as intermediate");
+        }
+        // Host -> Host
+        (None, None) => {
+            // Standard file copy
+            let src = std::path::Path::new(&src_path);
+            let dst = std::path::Path::new(&dst_path);
+            if src.is_dir() {
+                copy_dir_recursive(src, dst)?;
+            } else {
+                std::fs::copy(src, dst)?;
+            }
+            println!("Copied {source} -> {destination}");
+        }
+    }
+
+    Ok(())
+}
+
+/// Parses a cp path into (container_name, path) or (None, path) for host paths.
+/// A container path starts with a container name followed by `:`.
+fn parse_cp_path(path: &str) -> (Option<&str>, String) {
+    if let Some(colon_pos) = path.find(':') {
+        let container = &path[..colon_pos];
+        let file_path = &path[colon_pos + 1..];
+        // Validate container name (alphanumeric, hyphens, underscores)
+        if !container.is_empty()
+            && container
+                .chars()
+                .all(|c| c.is_alphanumeric() || c == '-' || c == '_')
+        {
+            return (Some(container), file_path.to_string());
+        }
+    }
+    (None, path.to_string())
+}
+
+/// Copies a file or directory from the host into a container.
+async fn copy_to_container(container_id: &str, src: &str, dst: &str) -> anyhow::Result<()> {
+    let socket = std::env::var("ORIGIN_CONTAINERD_SOCKET")
+        .unwrap_or_else(|_| "/run/containerd/containerd.sock".to_string());
+    let namespace = "tpt-boxcar";
+
+    let src_path = std::path::Path::new(src);
+    if !src_path.exists() {
+        anyhow::bail!("source path does not exist: {src}");
+    }
+
+    // Create a tar of the source and pipe it to the container via ctr tasks exec
+    let mut tar_cmd = std::process::Command::new("tar");
+    tar_cmd.arg("-cf").arg("-").arg("-C");
+    tar_cmd.arg(
+        src_path
+            .parent()
+            .unwrap_or_else(|| std::path::Path::new("."))
+            .to_string_lossy()
+            .to_string(),
+    );
+    tar_cmd.arg(
+        src_path
+            .file_name()
+            .unwrap_or_else(|| std::ffi::OsStr::new("."))
+            .to_string_lossy()
+            .to_string(),
+    );
+
+    let tar_output = tar_cmd
+        .output()
+        .context("failed to create tar archive")?;
+
+    if !tar_output.status.success() {
+        anyhow::bail!(
+            "failed to create tar archive: {}",
+            String::from_utf8_lossy(&tar_output.stderr)
+        );
+    }
+
+    // Create destination directory if needed
+    let mkdir_status = tokio::process::Command::new("ctr")
+        .args([
+            "--address",
+            &socket,
+            "--namespace",
+            namespace,
+            "tasks",
+            "exec",
+            "--exec-id",
+            &format!("cp-mkdir-{}", std::process::id()),
+            container_id,
+            "mkdir",
+            "-p",
+            dst,
+        ])
+        .output()
+        .await
+        .context("failed to create destination directory")?;
+
+    if !mkdir_status.status.success() {
+        tracing::warn!(
+            "mkdir -p {dst} failed (may already exist): {}",
+            String::from_utf8_lossy(&mkdir_status.stderr)
+        );
+    }
+
+    // Pipe tar output to container's tar -xf
+    let mut ctr_cmd = std::process::Command::new("ctr");
+    ctr_cmd.args([
+        "--address",
+        &socket,
+        "--namespace",
+        namespace,
+        "tasks",
+        "exec",
+        "--exec-id",
+        &format!("cp-{}", std::process::id()),
+        container_id,
+        "tar",
+        "-xf",
+        "-",
+        "-C",
+        dst,
+    ]);
+    ctr_cmd.stdin(std::process::Stdio::piped());
+
+    let mut child = ctr_cmd
+        .spawn()
+        .context("failed to spawn ctr tasks exec for cp")?;
+
+    if let Some(mut stdin) = child.stdin.take() {
+        std::io::Write::write_all(&mut stdin, &tar_output.stdout)
+            .context("failed to write tar data to container")?;
+    }
+
+    let status = child
+        .wait()
+        .context("failed to wait for cp command")?;
+
+    if !status.success() {
+        anyhow::bail!("failed to copy to container: exit status {status}");
+    }
+
+    println!("Copied {src} -> {container_id}:{dst}");
+    Ok(())
+}
+
+/// Copies a file or directory from a container to the host.
+async fn copy_from_container(container_id: &str, src: &str, dst: &str) -> anyhow::Result<()> {
+    let socket = std::env::var("ORIGIN_CONTAINERD_SOCKET")
+        .unwrap_or_else(|_| "/run/containerd/containerd.sock".to_string());
+    let namespace = "tpt-boxcar";
+
+    // Use ctr tasks exec to tar the source and capture output
+    let output = tokio::process::Command::new("ctr")
+        .args([
+            "--address",
+            &socket,
+            "--namespace",
+            namespace,
+            "tasks",
+            "exec",
+            "--exec-id",
+            &format!("cp-{}", std::process::id()),
+            container_id,
+            "tar",
+            "-cf",
+            "-",
+            "-C",
+            std::path::Path::new(src)
+                .parent()
+                .unwrap_or_else(|| std::path::Path::new("/"))
+                .to_string_lossy()
+                .to_string()
+                .as_str(),
+            std::path::Path::new(src)
+                .file_name()
+                .unwrap_or_else(|| std::ffi::OsStr::new("."))
+                .to_string_lossy()
+                .to_string()
+                .as_str(),
+        ])
+        .output()
+        .await
+        .context("failed to exec tar in container")?;
+
+    if !output.status.success() {
+        anyhow::bail!(
+            "failed to read from container: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+
+    // Extract the tar on the host
+    let dst_path = std::path::Path::new(dst);
+    if !dst_path.exists() {
+        if dst.ends_with('/') || dst.ends_with('\\') || dst_path.extension().is_none() {
+            // Destination is a directory (or looks like one)
+            std::fs::create_dir_all(dst)?;
+        } else {
+            // Destination is a file - ensure parent exists
+            if let Some(parent) = dst_path.parent() {
+                std::fs::create_dir_all(parent)?;
+            }
+        }
+    }
+
+    let mut tar_cmd = std::process::Command::new("tar");
+    tar_cmd.arg("-xf").arg("-").arg("-C").arg(dst);
+
+    let mut child = tar_cmd
+        .stdin(std::process::Stdio::piped())
+        .spawn()
+        .context("failed to spawn tar for extraction")?;
+
+    if let Some(mut stdin) = child.stdin.take() {
+        std::io::Write::write_all(&mut stdin, &output.stdout)
+            .context("failed to write tar data for extraction")?;
+    }
+
+    let status = child
+        .wait()
+        .context("failed to wait for tar extraction")?;
+
+    if !status.success() {
+        anyhow::bail!("failed to extract from container: exit status {status}");
+    }
+
+    println!("Copied {container_id}:{src} -> {dst}");
+    Ok(())
+}
+
+/// Recursively copies a directory.
+fn copy_dir_recursive(src: &std::path::Path, dst: &std::path::Path) -> anyhow::Result<()> {
+    if !dst.exists() {
+        std::fs::create_dir_all(dst)?;
+    }
+    for entry in std::fs::read_dir(src)? {
+        let entry = entry?;
+        let src_path = entry.path();
+        let dst_path = dst.join(entry.file_name());
+        if src_path.is_dir() {
+            copy_dir_recursive(&src_path, &dst_path)?;
+        } else {
+            std::fs::copy(&src_path, &dst_path)?;
+        }
+    }
+    Ok(())
+}
+
+// Every branch below bails on some platform/service-type combination but not
+// others (e.g. the OCI branch only diverges when `target_os != "linux"`), so
+// the trailing `Ok(())` is unreachable on some cfg combinations and not
+// others — expected, not a real dead-code bug.
+#[allow(unreachable_code)]
+async fn cmd_pause(service: &str) -> anyhow::Result<()> {
+    let dir = std::path::Path::new(".");
+    match state::read(dir)? {
+        Some(env) => {
+            let svc = env
+                .services
+                .iter()
+                .find(|s| s.name == service)
+                .ok_or_else(|| anyhow::anyhow!("service '{service}' not found in running environment"))?;
+
+            if svc.service_type == "oci" {
+                // OCI services are frozen via containerd's real cgroup freezer
+                // (Tasks.Pause), not a signal — the container id is the
+                // service name (see RuntimeManager::start_oci).
+                #[cfg(target_os = "linux")]
+                {
+                    let client = tpt_origin_core::containerd::ContainerdClient::connect().await?;
+                    client.pause_container(service).await?;
+                    println!("Paused {service} (cgroup freezer)");
+                }
+                #[cfg(not(target_os = "linux"))]
+                {
+                    anyhow::bail!("pausing OCI services requires containerd, which is Linux-only");
+                }
+            } else if let Some(pid) = svc.pid {
+                #[cfg(unix)]
+                {
+                    use libc::{kill, SIGSTOP};
+                    unsafe {
+                        kill(pid as i32, SIGSTOP);
+                    }
+                    println!("Paused {service} (PID: {pid})");
+                }
+                #[cfg(not(unix))]
+                {
+                    let _ = pid;
+                    anyhow::bail!("pause is only supported on Unix/Linux systems for process services");
+                }
+            } else {
+                anyhow::bail!("service '{service}' has no PID (may not be a process service)");
+            }
+        }
+        None => anyhow::bail!("no running environment found (run `tpt origin up` first)"),
+    }
+    Ok(())
+}
+
+#[allow(unreachable_code)]
+async fn cmd_unpause(service: &str) -> anyhow::Result<()> {
+    let dir = std::path::Path::new(".");
+    match state::read(dir)? {
+        Some(env) => {
+            let svc = env
+                .services
+                .iter()
+                .find(|s| s.name == service)
+                .ok_or_else(|| anyhow::anyhow!("service '{service}' not found in running environment"))?;
+
+            if svc.service_type == "oci" {
+                #[cfg(target_os = "linux")]
+                {
+                    let client = tpt_origin_core::containerd::ContainerdClient::connect().await?;
+                    client.unpause_container(service).await?;
+                    println!("Unpaused {service} (cgroup freezer)");
+                }
+                #[cfg(not(target_os = "linux"))]
+                {
+                    anyhow::bail!("unpausing OCI services requires containerd, which is Linux-only");
+                }
+            } else if let Some(pid) = svc.pid {
+                #[cfg(unix)]
+                {
+                    use libc::{kill, SIGCONT};
+                    unsafe {
+                        kill(pid as i32, SIGCONT);
+                    }
+                    println!("Unpaused {service} (PID: {pid})");
+                }
+                #[cfg(not(unix))]
+                {
+                    let _ = pid;
+                    anyhow::bail!("unpause is only supported on Unix/Linux systems for process services");
+                }
+            } else {
+                anyhow::bail!("service '{service}' has no PID (may not be a process service)");
+            }
+        }
+        None => anyhow::bail!("no running environment found (run `tpt origin up` first)"),
+    }
+    Ok(())
 }

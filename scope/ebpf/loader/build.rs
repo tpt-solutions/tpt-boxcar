@@ -11,16 +11,15 @@
 
 use std::path::PathBuf;
 
-use aya_build::cargo_metadata;
-
 fn main() {
-    let cargo_metadata::Metadata { packages, .. } = cargo_metadata::MetadataCommand::new()
+    let metadata = cargo_metadata::MetadataCommand::new()
         .no_deps()
         .manifest_path(concat!(env!("CARGO_MANIFEST_DIR"), "/../probe/Cargo.toml"))
         .exec()
         .expect("failed to run `cargo metadata` on scope-ebpf-probe");
 
-    let probe_package = packages
+    let probe_package = metadata
+        .packages
         .into_iter()
         .find(|p| p.name == "scope-ebpf-probe")
         .expect("scope-ebpf-probe package not found by cargo metadata");
@@ -38,5 +37,16 @@ fn main() {
         probe_dir.join("Cargo.toml").display()
     );
 
-    aya_build::build_ebpf([probe_package]).expect("failed to build scope-ebpf-probe");
+    let package = aya_build::Package {
+        name: &probe_package.name,
+        root_dir: probe_dir.to_str().expect("probe dir is not valid UTF-8"),
+        no_default_features: false,
+        features: &[],
+    };
+
+    aya_build::build_ebpf(
+        [package],
+        aya_build::Toolchain::Nightly,
+    )
+    .expect("failed to build scope-ebpf-probe");
 }

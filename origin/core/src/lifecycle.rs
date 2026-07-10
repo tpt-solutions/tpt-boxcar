@@ -2,12 +2,137 @@ use anyhow::Result;
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
+use tokio::sync::broadcast;
 
 use crate::dns::DnsResolver;
 use crate::manifest::{Manifest, Service};
 use crate::network::NetworkManager;
 use crate::portmap::PortMapper;
 use crate::runtime::{RuntimeManager, ServiceStatus};
+
+/// Maximum number of events to buffer in the broadcast channel.
+/// If a subscriber is slow and the buffer fills, events are dropped.
+const EVENT_CHANNEL_CAPACITY: usize = 1024;
+
+/// Lifecycle events emitted during service transitions. Real-time event
+/// stream equivalent to `docker events`, allowing external observers to
+/// react to state changes without polling.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct LifecycleEvent {
+    /// Timestamp in Unix-epoch milliseconds.
+    pub timestamp_ms: u64,
+    /// Type of event.
+    pub event_type: EventType,
+    /// Name of the affected service.
+    pub service: String,
+    /// Additional context for the event.
+    pub detail: EventDetail,
+}
+
+/// Types of lifecycle events.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub enum EventType {
+    /// Service is starting.
+    Start,
+    /// Service has started successfully.
+    Started,
+    /// Service is being stopped.
+    Stop,
+    /// Service has stopped.
+    Stopped,
+    /// Service failed (crash, healthcheck, etc.).
+    Failed,
+    /// Service is being restarted.
+    Restart,
+    /// Health check passed.
+    HealthOk,
+    /// Health check failed (transient).
+    HealthFail,
+    /// Network attached to service.
+    NetworkAttach,
+    /// Network detached from service.
+    NetworkDetach,
+    /// Port mapping applied.
+    PortMap,
+    /// Environment merged (env_file loaded).
+    EnvMerge,
+    /// Service is paused (cgroup freezer).
+    Pause,
+    /// Service is unpaused.
+    Unpause,
+}
+
+/// Additional detail for lifecycle events.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum EventDetail {
+    /// No additional detail.
+    None,
+    /// Failure message.
+    Failure(String),
+    /// Health check retry count.
+    HealthRetries(u32),
+    /// Network name.
+    Network(String),
+    /// Port mapping (host:container).
+    Port(u16, u16),
+    /// Status transition (from, to).
+    StatusChange(ServiceStatus, ServiceStatus),
+}
+
+impl LifecycleEvent {
+    /// Creates a new lifecycle event with the current timestamp.
+    fn new(event_type: EventType, service: impl Into<String>, detail: EventDetail) -> Self {
+        let timestamp_ms = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_millis() as u64;
+        Self {
+            timestamp_ms,
+            event_type,
+            service: service.into(),
+            detail,
+        }
+    }
+}
+
+/// Broadcast event bus for lifecycle events. Uses `tokio::sync::broadcast`
+/// which supports multiple subscribers and backpressure.
+#[derive(Clone)]
+pub struct EventBus {
+    sender: broadcast::Sender<LifecycleEvent>,
+}
+
+impl EventBus {
+    /// Creates a new event bus with the default capacity.
+    pub fn new() -> Self {
+        let (sender, _) = broadcast::channel(EVENT_CHANNEL_CAPACITY);
+        Self { sender }
+    }
+
+    /// Creates a new event bus with a custom capacity.
+    pub fn with_capacity(capacity: usize) -> Self {
+        let (sender, _) = broadcast::channel(capacity);
+        Self { sender }
+    }
+
+    /// Publishes an event to all subscribers.
+    pub fn emit(&self, event: LifecycleEvent) {
+        // Ignore error if there are no subscribers
+        let _ = self.sender.send(event);
+    }
+
+    /// Subscribes to lifecycle events. Returns a receiver that will receive
+    /// all future events from the time of subscription.
+    pub fn subscribe(&self) -> broadcast::Receiver<LifecycleEvent> {
+        self.sender.subscribe()
+    }
+}
+
+impl Default for EventBus {
+    fn default() -> Self {
+        Self::new()
+    }
+}
 
 /// Orders `manifest.services` into dependency-respecting "waves": each wave
 /// is a list of service names whose `depends_on` are all satisfied by
@@ -125,6 +250,8 @@ pub struct LifecycleManager {
     /// `restart_service`, and `reap_and_restart` can (re)attach/detach
     /// services without needing the manifest passed back in every time.
     network_names: Vec<String>,
+    /// Event bus for lifecycle transitions.
+    events: EventBus,
 }
 
 impl LifecycleManager {
@@ -137,6 +264,7 @@ impl LifecycleManager {
             health: HashMap::new(),
             manifest_name: manifest.name.clone(),
             network_names: Vec::new(),
+            events: EventBus::new(),
         }
     }
 
@@ -151,7 +279,13 @@ impl LifecycleManager {
             health: HashMap::new(),
             manifest_name: manifest.name.clone(),
             network_names: Vec::new(),
+            events: EventBus::new(),
         }
+    }
+
+    /// Returns a reference to the event bus for subscribing to lifecycle events.
+    pub fn event_bus(&self) -> &EventBus {
+        &self.events
     }
 
     pub async fn up(&mut self, manifest: &Manifest) -> Result<()> {
@@ -162,8 +296,10 @@ impl LifecycleManager {
                 .create_network(crate::network::NetworkConfig {
                     name: name.clone(),
                     driver: net_config.driver.clone(),
-                    subnet: None,
-                    gateway: None,
+                    subnet: net_config.subnet.clone(),
+                    gateway: net_config.gateway.clone(),
+                    vni: net_config.vni,
+                    peers: net_config.peers.clone(),
                 })
                 .await?;
         }
@@ -193,11 +329,21 @@ impl LifecycleManager {
                     .services
                     .get(name)
                     .expect("topological_waves only returns known service names");
+                self.events.emit(LifecycleEvent::new(
+                    EventType::Start,
+                    name,
+                    EventDetail::None,
+                ));
                 self.runtime.start_service(name, service).await?;
                 if let Some(health) = self.health.get_mut(name) {
                     health.status = ServiceStatus::Running;
                     health.started_at = Some(Instant::now());
                 }
+                self.events.emit(LifecycleEvent::new(
+                    EventType::Started,
+                    name,
+                    EventDetail::None,
+                ));
                 self.connect_service_networks(name).await;
                 self.apply_port_mappings(name, service).await;
             }
@@ -231,7 +377,12 @@ impl LifecycleManager {
                 None => self.network.connect_service(name, &net_name).await,
             };
             match result {
-                Ok(ip) => self.dns.add_entry(name, &ip, None),
+                Ok(ip) => {
+                    self.dns.add_entry(name, &ip, None);
+                    if let Some(ipv6) = self.network.assigned_ipv6(&net_name, name) {
+                        self.dns.add_entry(name, ipv6, None);
+                    }
+                }
                 Err(e) => tracing::warn!(
                     "failed to connect service '{name}' to network '{net_name}': {e:#}"
                 ),
@@ -286,11 +437,25 @@ impl LifecycleManager {
 
     pub async fn down(&mut self) -> Result<()> {
         tracing::info!("Tearing down environment: {}", self.manifest_name);
+        for name in self.health.keys().cloned().collect::<Vec<_>>() {
+            self.events.emit(LifecycleEvent::new(
+                EventType::Stop,
+                &name,
+                EventDetail::None,
+            ));
+        }
         self.port_mapper.stop_all();
         for name in self.health.keys().cloned().collect::<Vec<_>>() {
             self.disconnect_service_networks(&name).await;
         }
         self.runtime.stop_all().await?;
+        for name in self.health.keys().cloned().collect::<Vec<_>>() {
+            self.events.emit(LifecycleEvent::new(
+                EventType::Stopped,
+                &name,
+                EventDetail::None,
+            ));
+        }
         self.dns.stop().await?;
         for net_name in self.network_names.clone() {
             if let Err(e) = self.network.delete_network(&net_name).await {
@@ -303,16 +468,41 @@ impl LifecycleManager {
 
     pub async fn restart_service(&mut self, name: &str, manifest: &Manifest) -> Result<()> {
         tracing::info!("Restarting service: {name}");
+        self.events.emit(LifecycleEvent::new(
+            EventType::Restart,
+            name,
+            EventDetail::None,
+        ));
+        self.events.emit(LifecycleEvent::new(
+            EventType::Stop,
+            name,
+            EventDetail::None,
+        ));
         self.port_mapper.stop_service(name);
         self.disconnect_service_networks(name).await;
         self.runtime.stop_service(name).await?;
+        self.events.emit(LifecycleEvent::new(
+            EventType::Stopped,
+            name,
+            EventDetail::None,
+        ));
         if let Some(service) = manifest.services.get(name) {
+            self.events.emit(LifecycleEvent::new(
+                EventType::Start,
+                name,
+                EventDetail::None,
+            ));
             self.runtime.start_service(name, service).await?;
             if let Some(health) = self.health.get_mut(name) {
                 health.restart_count += 1;
                 health.status = ServiceStatus::Running;
                 health.started_at = Some(Instant::now());
             }
+            self.events.emit(LifecycleEvent::new(
+                EventType::Started,
+                name,
+                EventDetail::None,
+            ));
             self.connect_service_networks(name).await;
             self.apply_port_mappings(name, service).await;
         }
@@ -327,6 +517,11 @@ impl LifecycleManager {
     pub async fn reap_and_restart(&mut self, manifest: &Manifest) -> Result<Vec<String>> {
         let restarted = self.runtime.reap_and_restart(manifest).await?;
         for name in &restarted {
+            self.events.emit(LifecycleEvent::new(
+                EventType::Restart,
+                name,
+                EventDetail::None,
+            ));
             if let Some(health) = self.health.get_mut(name) {
                 health.restart_count += 1;
                 health.status = ServiceStatus::Running;
@@ -355,7 +550,34 @@ impl LifecycleManager {
         for name in self.health.keys().cloned().collect::<Vec<_>>() {
             if let Some(status) = self.runtime.get_status(&name) {
                 if let Some(health) = self.health.get_mut(&name) {
+                    let old_status = health.status.clone();
                     health.status = status.clone();
+                    if old_status != *status {
+                        match status {
+                            ServiceStatus::HealthChecking => {
+                                self.events.emit(LifecycleEvent::new(
+                                    EventType::HealthFail,
+                                    name,
+                                    EventDetail::StatusChange(old_status, status.clone()),
+                                ));
+                            }
+                            ServiceStatus::Running => {
+                                self.events.emit(LifecycleEvent::new(
+                                    EventType::HealthOk,
+                                    name,
+                                    EventDetail::StatusChange(old_status, status.clone()),
+                                ));
+                            }
+                            ServiceStatus::Failed(msg) => {
+                                self.events.emit(LifecycleEvent::new(
+                                    EventType::Failed,
+                                    name,
+                                    EventDetail::Failure(msg.clone()),
+                                ));
+                            }
+                            _ => {}
+                        }
+                    }
                 }
             }
         }
@@ -383,6 +605,36 @@ impl LifecycleManager {
             .filter_map(|(name, h)| h.started_at.map(|t| (name.clone(), t)))
             .collect();
         crate::stats::collect_stats(self.runtime.list_services(), &start_times)
+    }
+
+    /// Pauses a running service, freezing its CPU and memory usage.
+    pub async fn pause_service(&mut self, name: &str) -> Result<()> {
+        tracing::info!("Pausing service: {name}");
+        self.events.emit(LifecycleEvent::new(
+            EventType::Pause,
+            name,
+            EventDetail::None,
+        ));
+        self.runtime.pause_service(name).await?;
+        if let Some(health) = self.health.get_mut(name) {
+            health.status = ServiceStatus::Paused;
+        }
+        Ok(())
+    }
+
+    /// Unpauses a paused service, resuming its execution.
+    pub async fn unpause_service(&mut self, name: &str) -> Result<()> {
+        tracing::info!("Unpausing service: {name}");
+        self.events.emit(LifecycleEvent::new(
+            EventType::Unpause,
+            name,
+            EventDetail::None,
+        ));
+        self.runtime.unpause_service(name).await?;
+        if let Some(health) = self.health.get_mut(name) {
+            health.status = ServiceStatus::Running;
+        }
+        Ok(())
     }
 
     /// Returns detailed inspect information for a named service, combining
@@ -526,6 +778,10 @@ mod topological_waves_tests {
             secrets: None,
             security: None,
             logging: None,
+            healthcheck: None,
+            profiles: vec![],
+            configs: None,
+            extends: None,
         })
     }
 
@@ -540,6 +796,8 @@ mod topological_waves_tests {
             networks: HashMap::new(),
             volumes: HashMap::new(),
             logging: None,
+            configs: HashMap::new(),
+            secrets: HashMap::new(),
         }
     }
 

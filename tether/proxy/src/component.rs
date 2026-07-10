@@ -5,7 +5,9 @@
 //! [`WireDriver`] enum. This is an adapter layer only — `drivers/wire.rs` and
 //! the individual wire-protocol drivers are untouched.
 
-use crate::drivers::{DriverKind, QueryRow as InternalQueryRow, WireDriver, WireTransaction};
+use crate::drivers::{
+    DriverKind, QueryRow as InternalQueryRow, Subscription, WireDriver, WireTransaction,
+};
 
 wasmtime::component::bindgen!({
     path: "../wit",
@@ -13,6 +15,7 @@ wasmtime::component::bindgen!({
     async: true,
 });
 
+use tpt::tether::pubsub::Message as WitMessage;
 use tpt::tether::types::{QueryRow as WitQueryRow, TetherError, Value as WitValue};
 
 /// Host state passed to the wasmtime `Store` for an instantiated guest
@@ -20,6 +23,17 @@ use tpt::tether::types::{QueryRow as WitQueryRow, TetherError, Value as WitValue
 pub struct WitHostState {
     driver: WireDriver,
     open_transaction: Option<WireTransaction>,
+    /// Connection parameters used to open dedicated pub/sub connections
+    /// (Redis puts a subscribed connection into a restricted mode, so it
+    /// can't reuse `driver`'s own connection — see `drivers/pubsub.rs`).
+    /// `None` means `pubsub::subscription::open` will fail with
+    /// `not-connected`, which is correct for hosts that never called
+    /// `with_connection_info` (e.g. the unconnected-driver smoke test in
+    /// `component_test.rs`).
+    conn_info: Option<(String, u16, String, String)>,
+    /// Open subscriptions, indexed by resource rep (slab allocator: `None`
+    /// marks a freed slot, reused on the next `open`).
+    subscriptions: Vec<Option<Subscription>>,
 }
 
 impl WitHostState {
@@ -27,7 +41,23 @@ impl WitHostState {
         Self {
             driver,
             open_transaction: None,
+            conn_info: None,
+            subscriptions: Vec::new(),
         }
+    }
+
+    /// Records host/port/credentials so `pubsub::subscription::open` can
+    /// open its own dedicated connection later. Should be called with the
+    /// same parameters used to `connect()` the wrapped `driver`.
+    pub fn with_connection_info(
+        mut self,
+        host: impl Into<String>,
+        port: u16,
+        username: impl Into<String>,
+        password: impl Into<String>,
+    ) -> Self {
+        self.conn_info = Some((host.into(), port, username.into(), password.into()));
+        self
     }
 }
 
@@ -228,6 +258,102 @@ impl tpt::tether::kv::Host for WitHostState {
             .await
             .map_err(to_wit_error)?;
         Ok(affected > 0)
+    }
+}
+
+#[wasmtime::component::__internal::async_trait]
+impl tpt::tether::pubsub::HostSubscription for WitHostState {
+    async fn open(
+        &mut self,
+        channels: Vec<String>,
+    ) -> Result<wasmtime::component::Resource<tpt::tether::pubsub::Subscription>, TetherError>
+    {
+        require_redis(&self.driver)?;
+        let (host, port, username, password) =
+            self.conn_info.clone().ok_or(TetherError::NotConnected)?;
+        let sub = Subscription::open(&host, port, &username, &password, &channels)
+            .await
+            .map_err(to_wit_error)?;
+
+        // Slab allocation: reuse a freed slot (from a dropped subscription)
+        // if one exists, otherwise grow.
+        let rep = if let Some(idx) = self.subscriptions.iter().position(|s| s.is_none()) {
+            self.subscriptions[idx] = Some(sub);
+            idx
+        } else {
+            self.subscriptions.push(Some(sub));
+            self.subscriptions.len() - 1
+        };
+        Ok(wasmtime::component::Resource::new_own(rep as u32))
+    }
+
+    async fn subscribe(
+        &mut self,
+        self_: wasmtime::component::Resource<tpt::tether::pubsub::Subscription>,
+        channels: Vec<String>,
+    ) -> Result<(), TetherError> {
+        let sub = self
+            .subscriptions
+            .get(self_.rep() as usize)
+            .and_then(|s| s.as_ref())
+            .ok_or(TetherError::NotConnected)?;
+        sub.subscribe_more(&channels).await.map_err(to_wit_error)
+    }
+
+    async fn unsubscribe(
+        &mut self,
+        self_: wasmtime::component::Resource<tpt::tether::pubsub::Subscription>,
+        channels: Vec<String>,
+    ) -> Result<(), TetherError> {
+        let sub = self
+            .subscriptions
+            .get(self_.rep() as usize)
+            .and_then(|s| s.as_ref())
+            .ok_or(TetherError::NotConnected)?;
+        sub.unsubscribe(&channels).await.map_err(to_wit_error)
+    }
+
+    async fn poll(
+        &mut self,
+        self_: wasmtime::component::Resource<tpt::tether::pubsub::Subscription>,
+    ) -> Result<Option<WitMessage>, TetherError> {
+        let sub = self
+            .subscriptions
+            .get(self_.rep() as usize)
+            .and_then(|s| s.as_ref())
+            .ok_or(TetherError::NotConnected)?;
+        Ok(sub.poll().await.map(|m| WitMessage {
+            channel: m.channel,
+            payload: m.payload,
+        }))
+    }
+
+    async fn drop(
+        &mut self,
+        rep: wasmtime::component::Resource<tpt::tether::pubsub::Subscription>,
+    ) -> wasmtime::Result<()> {
+        if let Some(slot) = self.subscriptions.get_mut(rep.rep() as usize) {
+            // Dropping the `Subscription` aborts its background reader task.
+            *slot = None;
+        }
+        Ok(())
+    }
+}
+
+#[wasmtime::component::__internal::async_trait]
+impl tpt::tether::pubsub::Host for WitHostState {
+    async fn publish(&mut self, channel: String, payload: String) -> Result<u64, TetherError> {
+        require_redis(&self.driver)?;
+        self.driver
+            .execute(
+                "PUBLISH",
+                &[
+                    serde_json::Value::String(channel),
+                    serde_json::Value::String(payload),
+                ],
+            )
+            .await
+            .map_err(to_wit_error)
     }
 }
 

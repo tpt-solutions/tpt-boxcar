@@ -22,6 +22,8 @@ fn sample_manifest(wasm_path: std::path::PathBuf) -> Manifest {
                 source: "app-data".to_string(),
                 target: "/data".to_string(),
                 read_only: false,
+                mount_type: Default::default(),
+                tmpfs_options: None,
             }],
             command: None,
             depends_on: vec![],
@@ -32,6 +34,10 @@ fn sample_manifest(wasm_path: std::path::PathBuf) -> Manifest {
             secrets: None,
             security: None,
             logging: None,
+            profiles: vec![],
+            build: None,
+            configs: None,
+            extends: None,
         }),
     );
     services.insert(
@@ -51,6 +57,10 @@ fn sample_manifest(wasm_path: std::path::PathBuf) -> Manifest {
             secrets: None,
             security: None,
             logging: None,
+            healthcheck: None,
+            profiles: vec![],
+            configs: None,
+            extends: None,
         }),
     );
 
@@ -59,6 +69,10 @@ fn sample_manifest(wasm_path: std::path::PathBuf) -> Manifest {
         "frontend".to_string(),
         tpt_origin_core::manifest::Network {
             driver: "bridge".to_string(),
+            subnet: None,
+            gateway: None,
+            vni: None,
+            peers: vec![],
         },
     );
 
@@ -77,6 +91,8 @@ fn sample_manifest(wasm_path: std::path::PathBuf) -> Manifest {
         networks,
         volumes,
         logging: None,
+        configs: HashMap::new(),
+        secrets: HashMap::new(),
     }
 }
 
@@ -195,6 +211,10 @@ async fn test_lifecycle_manager_creation() {
             secrets: None,
             security: None,
             logging: None,
+            healthcheck: None,
+            profiles: vec![],
+            configs: None,
+            extends: None,
         }),
     );
     services.insert(
@@ -214,6 +234,10 @@ async fn test_lifecycle_manager_creation() {
             secrets: None,
             security: None,
             logging: None,
+            healthcheck: None,
+            profiles: vec![],
+            configs: None,
+            extends: None,
         }),
     );
     let manifest = Manifest {
@@ -223,6 +247,8 @@ async fn test_lifecycle_manager_creation() {
         networks: HashMap::new(),
         volumes: HashMap::new(),
         logging: None,
+        configs: HashMap::new(),
+        secrets: HashMap::new(),
     };
     let mut lm = LifecycleManager::new(&manifest);
     assert_eq!(lm.get_service_status("api").map(|s| &s.name), None);
@@ -292,6 +318,8 @@ async fn test_network_manager_create_delete() {
         driver: "bridge".to_string(),
         subnet: Some("10.1.0.0/16".to_string()),
         gateway: Some("10.1.0.1".to_string()),
+        vni: None,
+        peers: Vec::new(),
     })
     .await
     .unwrap();
@@ -320,6 +348,8 @@ async fn network_manager_creates_a_real_linux_bridge() {
         driver: "bridge".to_string(),
         subnet: None,
         gateway: None,
+        vni: None,
+        peers: Vec::new(),
     })
     .await
     .unwrap();
@@ -347,6 +377,29 @@ async fn network_manager_creates_a_real_linux_bridge() {
     );
 }
 
+/// `driver: overlay` should be accepted and never panic/error even without
+/// root or a `vni` — it just falls back to single-host bridge connectivity
+/// (or bookkeeping-only, unprivileged) with a warning, same as every other
+/// driver on an unprivileged/non-Linux CI runner.
+#[tokio::test]
+async fn test_network_manager_overlay_driver_accepted() {
+    let mut net = NetworkManager::new();
+
+    net.create_network(NetworkConfig {
+        name: "overlay-net".to_string(),
+        driver: "overlay".to_string(),
+        subnet: None,
+        gateway: None,
+        vni: Some(4242),
+        peers: vec!["10.0.0.2".to_string(), "10.0.0.3".to_string()],
+    })
+    .await
+    .unwrap();
+    assert_eq!(net.network_driver("overlay-net"), Some("overlay"));
+
+    net.delete_network("overlay-net").await.unwrap();
+}
+
 #[tokio::test]
 async fn test_network_manager_multiple_networks() {
     let mut net = NetworkManager::new();
@@ -356,6 +409,8 @@ async fn test_network_manager_multiple_networks() {
         driver: "bridge".to_string(),
         subnet: None,
         gateway: None,
+        vni: None,
+        peers: Vec::new(),
     })
     .await
     .unwrap();
@@ -365,6 +420,8 @@ async fn test_network_manager_multiple_networks() {
         driver: "bridge".to_string(),
         subnet: None,
         gateway: None,
+        vni: None,
+        peers: Vec::new(),
     })
     .await
     .unwrap();

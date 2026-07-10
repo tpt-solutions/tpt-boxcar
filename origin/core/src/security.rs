@@ -136,12 +136,30 @@ pub fn security_to_ctr_args(config: &SecurityConfig) -> Vec<String> {
         args.push("no-new-privileges".to_string());
     }
 
+    if config.read_only {
+        args.push("--read-only".to_string());
+    }
+
+    // Device passthrough (GPU, TUN/TAP, etc.)
+    for device in &config.devices {
+        let device_path = device
+            .path_in_container
+            .as_deref()
+            .unwrap_or(&device.path_on_host);
+        args.push("--device".to_string());
+        args.push(format!(
+            "{}:{}:{}",
+            device.path_on_host, device_path, device.permissions
+        ));
+    }
+
     args
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::manifest::DeviceMapping;
 
     #[test]
     fn security_to_ctr_args_drop_all_with_adds() {
@@ -150,6 +168,7 @@ mod tests {
             cap_drop: vec!["ALL".to_string()],
             read_only: false,
             no_new_privileges: false,
+            devices: vec![],
         };
         let args = security_to_ctr_args(&config);
         assert_eq!(
@@ -172,6 +191,7 @@ mod tests {
             cap_drop: vec!["NET_RAW".to_string(), "SYS_ADMIN".to_string()],
             read_only: false,
             no_new_privileges: false,
+            devices: vec![],
         };
         let args = security_to_ctr_args(&config);
         assert_eq!(
@@ -187,9 +207,63 @@ mod tests {
             cap_drop: vec![],
             read_only: false,
             no_new_privileges: true,
+            devices: vec![],
         };
         let args = security_to_ctr_args(&config);
         assert_eq!(args, vec!["--security-opt", "no-new-privileges"]);
+    }
+
+    #[test]
+    fn security_to_ctr_args_read_only() {
+        let config = SecurityConfig {
+            cap_add: vec![],
+            cap_drop: vec![],
+            read_only: true,
+            no_new_privileges: false,
+            devices: vec![],
+        };
+        let args = security_to_ctr_args(&config);
+        assert_eq!(args, vec!["--read-only"]);
+    }
+
+    #[test]
+    fn security_to_ctr_args_device_passthrough() {
+        let config = SecurityConfig {
+            cap_add: vec![],
+            cap_drop: vec![],
+            read_only: false,
+            no_new_privileges: false,
+            devices: vec![DeviceMapping {
+                path_on_host: "/dev/nvidia0".to_string(),
+                path_in_container: None,
+                permissions: "rwm".to_string(),
+            }],
+        };
+        let args = security_to_ctr_args(&config);
+        assert_eq!(
+            args,
+            vec!["--device", "/dev/nvidia0:/dev/nvidia0:rwm"]
+        );
+    }
+
+    #[test]
+    fn security_to_ctr_args_device_with_custom_path() {
+        let config = SecurityConfig {
+            cap_add: vec![],
+            cap_drop: vec![],
+            read_only: false,
+            no_new_privileges: false,
+            devices: vec![DeviceMapping {
+                path_on_host: "/dev/nvidia0".to_string(),
+                path_in_container: Some("/dev/gpu0".to_string()),
+                permissions: "rw".to_string(),
+            }],
+        };
+        let args = security_to_ctr_args(&config);
+        assert_eq!(
+            args,
+            vec!["--device", "/dev/nvidia0:/dev/gpu0:rw"]
+        );
     }
 
     #[test]

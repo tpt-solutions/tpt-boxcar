@@ -1,13 +1,17 @@
 use anyhow::{Context, Result};
 use std::collections::HashMap;
-use std::net::Ipv4Addr;
+use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 use tokio::net::UdpSocket;
 use tokio::sync::watch;
 
-#[derive(Debug, Clone)]
+/// A resolved service: dual-stack, so a service connected to a network with
+/// both an IPv4 and IPv6 allocation answers A and AAAA queries independently
+/// rather than picking one family to expose.
+#[derive(Debug, Clone, Default)]
 pub struct DnsEntry {
     pub name: String,
     pub ip: String,
+    pub ipv6: Option<String>,
     pub port: Option<u16>,
 }
 
@@ -55,17 +59,26 @@ impl DnsResolver {
         }
     }
 
+    /// Records an address for `name`. `ip` may be either an IPv4 or IPv6
+    /// literal; the two families are tracked independently on the same
+    /// entry so calling this once per family (as `connect_service_networks`
+    /// does when a service picks up both an A and AAAA allocation) leaves
+    /// both addresses resolvable rather than the second call clobbering the
+    /// first.
     pub fn add_entry(&mut self, name: &str, ip: &str, port: Option<u16>) {
         let fqdn = Self::fqdn(name);
         tracing::info!("DNS: {fqdn} -> {ip}");
-        self.entries.insert(
-            fqdn,
-            DnsEntry {
-                name: name.to_string(),
-                ip: ip.to_string(),
-                port,
-            },
-        );
+        let entry = self.entries.entry(fqdn).or_insert_with(|| DnsEntry {
+            name: name.to_string(),
+            ..Default::default()
+        });
+        match ip.parse::<IpAddr>() {
+            Ok(IpAddr::V6(_)) => entry.ipv6 = Some(ip.to_string()),
+            _ => entry.ip = ip.to_string(),
+        }
+        if port.is_some() {
+            entry.port = port;
+        }
         self.publish_update();
     }
 
@@ -162,10 +175,10 @@ impl Default for DnsResolver {
 }
 
 /// Parses a minimal DNS query (header + one question) and, if it asks for
-/// an A record matching a known `.local` entry, builds a real wire-format
-/// response with that entry's IP. Returns `None` on anything it doesn't
-/// recognize (malformed packet, non-A query, unknown name) rather than
-/// guessing.
+/// an A or AAAA record matching a known `.local` entry, builds a real
+/// wire-format response with that entry's address. Returns `None` on
+/// anything it doesn't recognize (malformed packet, unsupported qtype)
+/// rather than guessing.
 fn handle_query(query: &[u8], entries: &HashMap<String, DnsEntry>) -> Option<Vec<u8>> {
     if query.len() < 12 {
         return None;
@@ -184,12 +197,13 @@ fn handle_query(query: &[u8], entries: &HashMap<String, DnsEntry>) -> Option<Vec
     let qclass = u16::from_be_bytes([query[qname_end + 2], query[qname_end + 3]]);
 
     const TYPE_A: u16 = 1;
+    const TYPE_AAAA: u16 = 28;
     const CLASS_IN: u16 = 1;
 
     let mut response = Vec::with_capacity(query.len() + 16);
     response.extend_from_slice(id);
 
-    if qtype != TYPE_A || qclass != CLASS_IN {
+    if (qtype != TYPE_A && qtype != TYPE_AAAA) || qclass != CLASS_IN {
         // QR=1, Opcode=0, AA=0, RD=1, RA=0, RCODE=4 (Not Implemented)
         response.extend_from_slice(&[0x81, 0x04]);
         response.extend_from_slice(&[0, 1, 0, 0, 0, 0, 0, 0]);
@@ -202,8 +216,30 @@ fn handle_query(query: &[u8], entries: &HashMap<String, DnsEntry>) -> Option<Vec
         .get(&format!("{lookup_name}."))
         .or_else(|| entries.get(&lookup_name));
 
-    match entry.and_then(|e| e.ip.parse::<Ipv4Addr>().ok()) {
-        Some(ip) => {
+    let Some(entry) = entry else {
+        // QR=1, Opcode=0, AA=1, RD=1, RA=0, RCODE=3 (NXDOMAIN)
+        response.extend_from_slice(&[0x85, 0x03]);
+        response.extend_from_slice(&[0, 1, 0, 0, 0, 0, 0, 0]);
+        response.extend_from_slice(&query[12..qname_end + 4]);
+        return Some(response);
+    };
+
+    let rdata: Option<Vec<u8>> = if qtype == TYPE_AAAA {
+        entry
+            .ipv6
+            .as_deref()
+            .and_then(|ip| ip.parse::<Ipv6Addr>().ok())
+            .map(|ip| ip.octets().to_vec())
+    } else {
+        entry
+            .ip
+            .parse::<Ipv4Addr>()
+            .ok()
+            .map(|ip| ip.octets().to_vec())
+    };
+
+    match rdata {
+        Some(rdata) => {
             // QR=1, Opcode=0, AA=1, RD=1, RA=0, RCODE=0
             response.extend_from_slice(&[0x85, 0x00]);
             response.extend_from_slice(&[0, 1]); // QDCOUNT
@@ -212,16 +248,18 @@ fn handle_query(query: &[u8], entries: &HashMap<String, DnsEntry>) -> Option<Vec
             response.extend_from_slice(&query[12..qname_end + 4]); // echo question
 
             response.extend_from_slice(&[0xc0, 0x0c]); // pointer to question's QNAME
-            response.extend_from_slice(&TYPE_A.to_be_bytes());
+            response.extend_from_slice(&qtype.to_be_bytes());
             response.extend_from_slice(&CLASS_IN.to_be_bytes());
             response.extend_from_slice(&30u32.to_be_bytes()); // TTL
-            response.extend_from_slice(&4u16.to_be_bytes()); // RDLENGTH
-            response.extend_from_slice(&ip.octets());
+            response.extend_from_slice(&(rdata.len() as u16).to_be_bytes()); // RDLENGTH
+            response.extend_from_slice(&rdata);
             Some(response)
         }
         None => {
-            // QR=1, Opcode=0, AA=1, RD=1, RA=0, RCODE=3 (NXDOMAIN)
-            response.extend_from_slice(&[0x85, 0x03]);
+            // Name exists but has no record of the requested type: NOERROR
+            // with zero answers (matches real resolver behavior for an
+            // AAAA query against an IPv4-only host), not NXDOMAIN.
+            response.extend_from_slice(&[0x85, 0x00]);
             response.extend_from_slice(&[0, 1, 0, 0, 0, 0, 0, 0]);
             response.extend_from_slice(&query[12..qname_end + 4]);
             Some(response)
@@ -233,6 +271,11 @@ fn handle_query(query: &[u8], entries: &HashMap<String, DnsEntry>) -> Option<Vec
 /// for the A record of `name`, matching what an actual stub resolver sends.
 #[cfg(test)]
 fn build_query(id: u16, name: &str) -> Vec<u8> {
+    build_typed_query(id, name, 1) // QTYPE=A
+}
+
+#[cfg(test)]
+fn build_typed_query(id: u16, name: &str, qtype: u16) -> Vec<u8> {
     let mut packet = Vec::new();
     packet.extend_from_slice(&id.to_be_bytes());
     packet.extend_from_slice(&[0x01, 0x00]); // flags: RD=1
@@ -245,7 +288,7 @@ fn build_query(id: u16, name: &str) -> Vec<u8> {
     }
     packet.push(0); // root label
 
-    packet.extend_from_slice(&1u16.to_be_bytes()); // QTYPE=A
+    packet.extend_from_slice(&qtype.to_be_bytes());
     packet.extend_from_slice(&1u16.to_be_bytes()); // QCLASS=IN
     packet
 }
@@ -261,6 +304,7 @@ mod wire_protocol_tests {
             DnsEntry {
                 name: "web".to_string(),
                 ip: "10.0.0.2".to_string(),
+                ipv6: Some("fd00:88:4::2".to_string()),
                 port: Some(8080),
             },
         );
@@ -283,6 +327,40 @@ mod wire_protocol_tests {
         // Last 4 bytes of a single-A-record response are the raw IPv4 octets.
         let ip_bytes = &response[response.len() - 4..];
         assert_eq!(ip_bytes, &[10, 0, 0, 2]);
+    }
+
+    #[test]
+    fn answers_known_aaaa_record_with_real_ipv6_bytes() {
+        let query = build_typed_query(0x2345, "web.local", 28); // QTYPE=AAAA
+        let response = handle_query(&query, &sample_entries()).expect("should produce a response");
+
+        assert_eq!(response[3] & 0x0f, 0, "RCODE must be 0 (no error)");
+        let ip_bytes = &response[response.len() - 16..];
+        let ip = Ipv6Addr::from(<[u8; 16]>::try_from(ip_bytes).unwrap());
+        assert_eq!(ip, "fd00:88:4::2".parse::<Ipv6Addr>().unwrap());
+    }
+
+    #[test]
+    fn aaaa_query_against_v4_only_entry_is_noerror_empty_not_nxdomain() {
+        let mut entries = sample_entries();
+        entries.get_mut("web.local").unwrap().ipv6 = None;
+        let query = build_typed_query(0x3456, "web.local", 28);
+        let response = handle_query(&query, &entries).expect("should produce a response");
+
+        assert_eq!(response[3] & 0x0f, 0, "RCODE must be 0 (NOERROR)");
+        let ancount = u16::from_be_bytes([response[6], response[7]]);
+        assert_eq!(ancount, 0, "no AAAA record available, so zero answers");
+    }
+
+    #[test]
+    fn add_entry_tracks_v4_and_v6_independently() {
+        let mut resolver = DnsResolver::on("127.0.0.1:0");
+        resolver.add_entry("api", "10.0.0.5", None);
+        resolver.add_entry("api", "fd00:88::5", None);
+
+        let entry = resolver.resolve("api").expect("api should resolve");
+        assert_eq!(entry.ip, "10.0.0.5");
+        assert_eq!(entry.ipv6.as_deref(), Some("fd00:88::5"));
     }
 
     #[test]

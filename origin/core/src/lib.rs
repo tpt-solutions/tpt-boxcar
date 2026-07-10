@@ -15,6 +15,8 @@ pub mod runtime;
 pub mod security;
 pub mod stats;
 
+pub use lifecycle::EventBus;
+
 use lifecycle::{InspectInfo, LifecycleManager, ServiceHealthDto};
 use manifest::Manifest;
 
@@ -46,6 +48,12 @@ impl Origin {
         Self {
             lifecycle: LifecycleManager::new_rootless(manifest),
         }
+    }
+
+    /// Returns a reference to the event bus for subscribing to lifecycle events.
+    /// Subscribers receive real-time notifications of service state changes.
+    pub fn event_bus(&self) -> &EventBus {
+        self.lifecycle.event_bus()
     }
 
     pub async fn up(&mut self, manifest: &Manifest) -> anyhow::Result<()> {
@@ -98,6 +106,16 @@ impl Origin {
     /// running services.
     pub fn collect_stats(&self) -> Vec<stats::ServiceStats> {
         self.lifecycle.collect_stats()
+    }
+
+    /// Pauses a running service, freezing its CPU and memory usage.
+    pub async fn pause_service(&mut self, name: &str) -> anyhow::Result<()> {
+        self.lifecycle.pause_service(name).await
+    }
+
+    /// Unpauses a paused service, resuming its execution.
+    pub async fn unpause_service(&mut self, name: &str) -> anyhow::Result<()> {
+        self.lifecycle.unpause_service(name).await
     }
 
     pub fn service_pids(&self) -> std::collections::HashMap<String, u32> {

@@ -175,6 +175,8 @@ async fn test_flywheel_origin_to_scope() {
                 driver: net_cfg.driver.clone(),
                 subnet: None,
                 gateway: None,
+                vni: None,
+                peers: Vec::new(),
             })
             .await
             .unwrap();
@@ -291,6 +293,8 @@ async fn test_flywright_dns_network_roundtrip() {
                 driver: net_cfg.driver.clone(),
                 subnet: None,
                 gateway: None,
+                vni: None,
+                peers: Vec::new(),
             })
             .await
             .unwrap();

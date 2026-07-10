@@ -10,6 +10,128 @@ use tracing::{debug, info, instrument};
 use super::wire::DriverKind;
 use super::QueryRow;
 
+/// Encodes a Redis command in the RESP "multi bulk" request format.
+/// Free function (not tied to `TcpStream`) so it can also be used by the
+/// dedicated pub/sub connection in `pubsub.rs`, which needs to write to a
+/// split `OwnedWriteHalf` rather than a whole `TcpStream`.
+pub(crate) fn encode_resp_command(args: &[&str]) -> Vec<u8> {
+    let mut buf = Vec::new();
+    buf.extend_from_slice(format!("*{}\r\n", args.len()).as_bytes());
+    for arg in args {
+        buf.extend_from_slice(format!("${}\r\n", arg.len()).as_bytes());
+        buf.extend_from_slice(arg.as_bytes());
+        buf.extend_from_slice(b"\r\n");
+    }
+    buf
+}
+
+/// Reads and decodes one RESP2/RESP3 frame from any `AsyncRead` source.
+/// Generic (not tied to `TcpStream`) so it can also be used by the
+/// dedicated pub/sub connection in `pubsub.rs`, which reads from a split
+/// `OwnedReadHalf`.
+pub(crate) async fn read_resp_frame<R>(stream: &mut R) -> Result<RespFrame>
+where
+    R: tokio::io::AsyncRead + Unpin,
+{
+    let mut line_buf = Vec::new();
+    loop {
+        let mut byte = [0u8; 1];
+        stream.read_exact(&mut byte).await?;
+        if byte[0] == b'\n' {
+            break;
+        }
+        if byte[0] != b'\r' {
+            line_buf.push(byte[0]);
+        }
+    }
+
+    let line = String::from_utf8(line_buf).context("invalid RESP frame line")?;
+    let type_byte = line.as_bytes()[0];
+    let payload = &line[1..];
+
+    match type_byte {
+        b'+' => Ok(RespFrame::Simple(payload.to_string())),
+        b'-' => Ok(RespFrame::Error(payload.to_string())),
+        b':' => {
+            let val = payload.parse::<i64>().context("invalid integer")?;
+            Ok(RespFrame::Integer(val))
+        }
+        b'$' => {
+            let len: i64 = payload.parse().context("invalid bulk string length")?;
+            if len < 0 {
+                return Ok(RespFrame::Null);
+            }
+            let len = len as usize;
+            let mut data = vec![0u8; len];
+            stream.read_exact(&mut data).await?;
+            let mut crlf = [0u8; 2];
+            stream.read_exact(&mut crlf).await?;
+            Ok(RespFrame::BulkString(data))
+        }
+        b'*' => {
+            let count: i64 = payload.parse().context("invalid array length")?;
+            if count < 0 {
+                return Ok(RespFrame::Null);
+            }
+            let mut items = Vec::with_capacity(count as usize);
+            for _ in 0..count {
+                items.push(Box::pin(read_resp_frame(stream)).await?);
+            }
+            Ok(RespFrame::Array(items))
+        }
+        b'_' => Ok(RespFrame::Null),
+        b',' => {
+            let val = payload.parse::<f64>().context("invalid double")?;
+            Ok(RespFrame::Double(val))
+        }
+        b'(' => {
+            let val = payload.parse::<i64>().context("invalid big number")?;
+            Ok(RespFrame::BigNumber(val))
+        }
+        b'=' => {
+            let data = payload.as_bytes();
+            if data.len() >= 3 {
+                let encoding =
+                    std::str::from_utf8(&data[..3]).context("invalid verbatim encoding")?;
+                let text = std::str::from_utf8(&data[3..]).context("invalid verbatim text")?;
+                Ok(RespFrame::VerbatimString(
+                    encoding.to_string(),
+                    text.to_string(),
+                ))
+            } else {
+                Ok(RespFrame::Simple(payload.to_string()))
+            }
+        }
+        b'#' => {
+            let val = match payload {
+                "t" => true,
+                "f" => false,
+                _ => bail!("invalid boolean: {}", payload),
+            };
+            Ok(RespFrame::Boolean(val))
+        }
+        b'%' => {
+            let count: i64 = payload.parse().context("invalid map length")?;
+            let mut map = Vec::new();
+            for _ in 0..count {
+                let key = Box::pin(read_resp_frame(stream)).await?;
+                let value = Box::pin(read_resp_frame(stream)).await?;
+                map.push((key, value));
+            }
+            Ok(RespFrame::Map(map))
+        }
+        b'~' => {
+            let count: i64 = payload.parse().context("invalid set length")?;
+            let mut set = Vec::new();
+            for _ in 0..count {
+                set.push(Box::pin(read_resp_frame(stream)).await?);
+            }
+            Ok(RespFrame::Array(set))
+        }
+        _ => Ok(RespFrame::Simple(payload.to_string())),
+    }
+}
+
 pub struct RedisWireDriver {
     stream: Arc<Mutex<Option<TcpStream>>>,
     connected: bool,
@@ -43,114 +165,11 @@ impl RedisWireDriver {
     }
 
     fn encode_command(args: &[&str]) -> Vec<u8> {
-        let mut buf = Vec::new();
-        buf.extend_from_slice(format!("*{}\r\n", args.len()).as_bytes());
-        for arg in args {
-            buf.extend_from_slice(format!("${}\r\n", arg.len()).as_bytes());
-            buf.extend_from_slice(arg.as_bytes());
-            buf.extend_from_slice(b"\r\n");
-        }
-        buf
+        encode_resp_command(args)
     }
 
     async fn read_frame(stream: &mut TcpStream) -> Result<RespFrame> {
-        let mut line_buf = Vec::new();
-        loop {
-            let mut byte = [0u8; 1];
-            stream.read_exact(&mut byte).await?;
-            if byte[0] == b'\n' {
-                break;
-            }
-            if byte[0] != b'\r' {
-                line_buf.push(byte[0]);
-            }
-        }
-
-        let line = String::from_utf8(line_buf).context("invalid RESP frame line")?;
-        let type_byte = line.as_bytes()[0];
-        let payload = &line[1..];
-
-        match type_byte {
-            b'+' => Ok(RespFrame::Simple(payload.to_string())),
-            b'-' => Ok(RespFrame::Error(payload.to_string())),
-            b':' => {
-                let val = payload.parse::<i64>().context("invalid integer")?;
-                Ok(RespFrame::Integer(val))
-            }
-            b'$' => {
-                let len: i64 = payload.parse().context("invalid bulk string length")?;
-                if len < 0 {
-                    return Ok(RespFrame::Null);
-                }
-                let len = len as usize;
-                let mut data = vec![0u8; len];
-                stream.read_exact(&mut data).await?;
-                let mut crlf = [0u8; 2];
-                stream.read_exact(&mut crlf).await?;
-                Ok(RespFrame::BulkString(data))
-            }
-            b'*' => {
-                let count: i64 = payload.parse().context("invalid array length")?;
-                if count < 0 {
-                    return Ok(RespFrame::Null);
-                }
-                let mut items = Vec::with_capacity(count as usize);
-                for _ in 0..count {
-                    items.push(Box::pin(Self::read_frame(stream)).await?);
-                }
-                Ok(RespFrame::Array(items))
-            }
-            b'_' => Ok(RespFrame::Null),
-            b',' => {
-                let val = payload.parse::<f64>().context("invalid double")?;
-                Ok(RespFrame::Double(val))
-            }
-            b'(' => {
-                let val = payload.parse::<i64>().context("invalid big number")?;
-                Ok(RespFrame::BigNumber(val))
-            }
-            b'=' => {
-                let data = payload.as_bytes();
-                if data.len() >= 3 {
-                    let encoding =
-                        std::str::from_utf8(&data[..3]).context("invalid verbatim encoding")?;
-                    let text = std::str::from_utf8(&data[3..]).context("invalid verbatim text")?;
-                    Ok(RespFrame::VerbatimString(
-                        encoding.to_string(),
-                        text.to_string(),
-                    ))
-                } else {
-                    Ok(RespFrame::Simple(payload.to_string()))
-                }
-            }
-            b'#' => {
-                let val = match payload {
-                    "t" => true,
-                    "f" => false,
-                    _ => bail!("invalid boolean: {}", payload),
-                };
-                Ok(RespFrame::Boolean(val))
-            }
-            b'%' => {
-                let count: i64 = payload.parse().context("invalid map length")?;
-                let mut map = Vec::new();
-                for _ in 0..count {
-                    let key = Box::pin(Self::read_frame(stream)).await?;
-                    let value = Box::pin(Self::read_frame(stream)).await?;
-                    map.push((key, value));
-                }
-                Ok(RespFrame::Map(map))
-            }
-            b'~' => {
-                let count: i64 = payload.parse().context("invalid set length")?;
-                let mut set = Vec::new();
-                for _ in 0..count {
-                    set.push(Box::pin(Self::read_frame(stream)).await?);
-                }
-                Ok(RespFrame::Array(set))
-            }
-            _ => Ok(RespFrame::Simple(payload.to_string())),
-        }
+        read_resp_frame(stream).await
     }
 
     pub async fn send_and_read(&self, args: &[&str]) -> Result<RespFrame> {
