@@ -2,9 +2,11 @@
 
 > **License:** Apache 2.0 | **Repo type:** Monorepo | **Platform:** Linux · macOS · Windows (WSL2 for eBPF)
 >
-> **Progress:** 140 / 140 core tasks complete (Phase 0–8) · Phase 9 driver-correctness complete · Phase 10 backlog (6/6) complete, one follow-up item (Tether WIT pub/sub) tracked separately below · Phase 11 (Docker-replacement hardening) 22/26 complete, see bottom of file
+> **Progress:** 140 / 140 core tasks complete (Phase 0–8) · Phase 9 driver-correctness complete · Phase 10 backlog (7/7) complete · Phase 11 (Docker-replacement hardening) 25/26 complete · Phase 13 (platform-wide stub audit) in progress, see bottom of file
 >
 > **Correction (Phase 11):** a source-level review found several Phase 0 items below were checked off before the functionality was actually real — `containerd` integration (line below) was in-memory bookkeeping only, eBPF networking never touched a real kernel interface, and the "local service mesh" was DNS bookkeeping with no listening socket. These are being fixed under Phase 11; see that section for current status of each. eBPF networking and cgroup resource limits are now implemented (see Phase 11).
+>
+> **Correction (Phase 13):** a platform-wide stub-hunt found Phase 11's xDS CDS/EDS adapter item (below) was also checked off before it was real — `packAny()` in `frontier/control-plane/internal/xds/adapter.go` always emitted an empty `Any.Value`. Fixed in Phase 13; see that section.
 
 ---
 
@@ -228,7 +230,7 @@
 - [x] Implement REST CRUD API using Go 1.22 `ServeMux` with `protojson` encode/decode
 - [x] Implement atomic JSON config file pusher (`os.Rename`) to `/var/run/frontier/config.json` for Rust data plane
 - [x] Implement Consul *catalog* sync via HTTP blocking queries (`?index=N&wait=30s`) — no Connect/mTLS
-- [x] Implement optional xDS CDS+EDS adapter using correct `anypb.New()` packing (replaces broken `MarshalTo(nil)`)
+- [x] Implement optional xDS CDS+EDS adapter using correct `anypb.New()` packing (replaces broken `MarshalTo(nil)`) — **correction (Phase 13):** this was checked off before it was real; `packAny()` still emitted an empty `Any.Value` for every resource. Actually fixed in Phase 13 with real `envoy_cluster_v3.Cluster`/`envoy_endpoint_v3.ClusterLoadAssignment` messages
 - [x] Delete `frontier/control-plane/istio.go` (polls unsupported Istiod debug endpoints)
 - [x] Add config-file watcher task to Rust proxy (`listener.rs`) for hot-reload on version change
 - [x] Wrap `Router` and `UpstreamManager` in `Arc<RwLock<>>` to support atomic hot-reload
@@ -361,7 +363,7 @@
 
 ## Phase 10 — Beyond-Docker Differentiators (Backlog)
 
-> **Progress:** 6 / 6 tasks complete (a minimal real Wasmtime loading path was added to Origin as a prerequisite — see `runtime.rs`)
+> **Progress:** 7 / 7 tasks complete (a minimal real Wasmtime loading path was added to Origin as a prerequisite — see `runtime.rs`)
 
 - [x] Wasm module signing / attestation at build time (Chisel) verified at load time (Origin) — supply-chain integrity Docker images don't get by default
 - [x] Capability-scoped secrets injection via Tether — per-Wasm-module scoped credentials instead of whole-container env-var dumps
@@ -369,7 +371,7 @@
 - [x] Document and benchmark true scale-to-zero density — Wasm cold-start (sub-ms–few-ms) vs container cold-start, enabling serverless-like packing without a serverless platform
 - [x] Wasm plugin registry/marketplace for Frontier — shared, versioned plugin distribution (OCI-registry equivalent for Wasm plugins)
 - [x] Document/benchmark true multi-arch-by-default — Wasm modules run unmodified on ARM/x86 without multi-arch image builds
-- [ ] Tether WIT pub/sub interface (`tether/wit/tether.wit`) — deferred from the v1 `data`/`kv` interfaces because a long-lived subscription doesn't map onto WIT's synchronous call/return shape; needs a `wasi:io/streams`-based design or a polling API
+- [x] Tether WIT pub/sub interface (`tether/wit/tether.wit`) — implemented as a polling API (`subscription` resource with `subscribe`/`unsubscribe`/`poll`, plus a top-level `publish` func, `tether.wit:76-113`) rather than a `wasi:io/streams` design, matching the deferred rationale above. Real Redis pub/sub client in `tether/proxy/src/drivers/pubsub.rs` (dedicated `TcpStream`, background task draining RESP `message`/`pmessage` frames into a queue), wired into the component-model host traits in `tether/proxy/src/component.rs`
 
 ---
 
@@ -377,7 +379,7 @@
 
 > **Context:** a source-level review (not just re-reading docs) found that several products had headline capabilities implemented as in-memory bookkeeping or hardcoded placeholder data rather than working code — most critically Origin's containerd/OCI integration, the single feature that would make it an actual Docker replacement. This phase closes those gaps, prioritizing Origin first since it's the product positioned to replace Docker. Unlike earlier phases, items here start unchecked and are only marked `[x]` once independently verified working (several against a real, live containerd daemon in WSL2 — not just compiled).
 >
-> **Progress:** 22 / 26 tasks complete
+> **Progress:** 25 / 26 tasks complete
 
 ### Origin — containerd integration
 
@@ -424,7 +426,7 @@
 
 - [x] `CLAUDE.md`'s "Key Open Items" section was stale, listing two already-fixed Tether driver bugs as open — corrected to point at this phase instead
 - [x] `TODO.md`'s Phase 0 checkmarks for containerd integration and eBPF networking were inaccurate against the actual source — corrected above with inline notes rather than silently left wrong
-- [ ] Commit the substantial pre-existing uncommitted work found in `git status` (Tether WIT/component-model support, Origin/Chisel wasm-signing, Frontier OCI-plugin-source, Scope backend/schema work, docs/scripts housekeeping) in logically grouped commits — not yet done, pending explicit go-ahead before running `git commit`
+- [x] Commit the substantial pre-existing uncommitted work found in `git status` (Tether WIT/component-model support, Origin overlay networking, Origin CLI expansion) — landed in commit `acd2933` ("feat: Origin manifest/network/lifecycle hardening, Tether pub/sub driver, CLI expansion")
 
 ---
 
@@ -461,7 +463,19 @@
 - [x] `docker events` equivalent — `EventBus` (`lifecycle.rs:101-131`), exposed via `event_bus()` (287); `tpt origin events` subcommand + `cmd_events` (`main.rs:1661`)
 - [x] `docker cp` equivalent — `tpt origin cp` subcommand, `cmd_cp`/`copy_to_container`/`copy_from_container` (`main.rs:1739`+); handles host↔container both directions (container-to-container explicitly rejected, matching real `docker cp`'s own limitation)
 - [x] IPv6 support — dual-stack networking, AAAA records in DNS: every `NetworkManager` network gets a deterministic ULA (`fd00:88:<idx>::/64`) alongside its IPv4 `/24`; services connected via `connect_service`/`connect_service_with_pid` get both addresses (Linux veth/bridge get real `ip -6 addr add`, macOS/Windows get best-effort IPv6 gateway config); `DnsResolver` tracks IPv4/IPv6 per entry and its UDP responder (`dns.rs`) answers both A and AAAA queries (NOERROR/empty when a name has no record of the queried family, not NXDOMAIN); host port mappings (`portmap.rs`) bind dual-stack (`0.0.0.0` + `[::]`, IPv6 best-effort)
-- [ ] Overlay networks — multi-host networking
+- [x] Overlay networks — multi-host networking via VXLAN, modeled on Docker's own overlay driver (bridge + VXLAN): `driver: overlay` handling (`network.rs:142-154`), VXLAN device naming (`network.rs:382`), `attach_overlay_uplink` (`network.rs:490-584`, real VXLAN device + `bridge fdb` peering on Linux, honest warn-and-fallback on non-Linux); `vni`/peer-host fields on the network manifest schema (`manifest.rs:658-663`); covered by `test_network_manager_overlay_driver_accepted` (`integration_test.rs:380-400`)
 - [x] tmpfs mounts — `MountType::Tmpfs` + `tmpfs_options` (`manifest.rs:532-553`), consumed in `runtime.rs:331-338`, mapped to `containerd::MountType::Tmpfs`
 - [x] GPU/device passthrough — folded into `security:` rather than a standalone field: `SecurityConfig.devices: Vec<DeviceMapping>` (`manifest.rs:229-232`), rendered as `--device host:container:perms` in `security_to_ctr_args` (`security.rs:143-153`)
 - [x] `docker pause`/`unpause` — `Pause`/`Unpause` subcommands (`main.rs:189`, `cmd_pause`/`cmd_unpause`); process services use real `SIGSTOP`/`SIGCONT`; OCI services use a real cgroup v1/v2 freezer (`containerd::ContainerdClient::pause_task`/`resume_task`, `Tasks.Pause`/`Tasks.Resume` gRPC) — see `origin/core/src/containerd/mod.rs`
+
+---
+
+## Phase 13 — Platform-Wide Stub Audit
+
+> **Context:** a full-repo sweep (grep for stub/placeholder/mock/TODO signals across all five products, plus independent verification of Origin's Docker-comparison claims) found one previously-mismarked `[x]` item (see the Phase 11 correction above) and a handful of genuine, previously-undisclosed gaps. Unlike a routine pass, this phase exists specifically to catch checklist entries that were marked done before the code was real — the same failure mode Phase 11 was created to fix.
+
+- [x] Frontier xDS `packAny()` (`frontier/control-plane/internal/xds/adapter.go`) — was hardcoding `Value: []byte{}` for every CDS/EDS resource despite the Phase 11 checklist claiming real `anypb.New()` packing; now builds real `envoy_cluster_v3.Cluster`/`envoy_endpoint_v3.ClusterLoadAssignment` messages from `store.Upstream` fields and packs them via `anypb.New()`
+- [x] Origin `LifecycleManager::up()` (`origin/core/src/lifecycle.rs`) — doc comment claimed services within a topological wave "can start concurrently" but the loop awaited each service sequentially; fixed to actually start wave-mates concurrently
+- [x] Origin rootless networking (`origin/core/src/network.rs::create_rootless_network`) — `--rootless` only checked for `slirp4netns` presence then fell back to bookkeeping-only (no real L2/L3 connectivity) unconditionally; now actually invokes `slirp4netns` for real rootless connectivity, falling back only when the binary is genuinely absent
+- [x] Scope `WasmProbe` (`scope/agent/src/probes.rs`) — `attach`/`poll_event` were undocumented no-op stubs; wired to the existing real eBPF `SyscallProbeLoader` (`scope/ebpf/`) instead of building new kernel-tracing code
+- Not changed, left as an intentional, honestly-failing stub: `frontier/plugin-sdk/src/host.rs::http_request` (hardcoded 501) — out-of-scope SDK surface, not a fake result; would need a larger plugin-host-ABI design decision to add outbound HTTP
