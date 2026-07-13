@@ -1,8 +1,13 @@
 [package]
 name = "tpt-tether-proxy"
+description = "State and connection proxy exposing WASI Preview 2 interfaces to Wasm modules, with custom wire-protocol drivers for Postgres, MySQL, and Redis."
 version.workspace = true
 edition.workspace = true
 license.workspace = true
+repository.workspace = true
+readme = "README.md"
+keywords = ["wasm", "proxy", "postgres", "redis", "wasi"]
+categories = ["wasm", "network-programming"]
 
 [dependencies]
 tokio.workspace = true

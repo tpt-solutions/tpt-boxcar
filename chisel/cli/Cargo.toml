@@ -1,15 +1,20 @@
 [package]
 name = "tpt-chisel"
+description = "CLI for TPT Chisel — automatically distill OCI images and migrate workloads to Wasm with LLM guidance."
 version.workspace = true
 edition.workspace = true
 license.workspace = true
+repository.workspace = true
+readme = "README.md"
+keywords = ["wasm", "container", "llm", "oci", "cli"]
+categories = ["command-line-utilities", "development-tools"]
 
 [[bin]]
 name = "chisel"
 path = "src/main.rs"
 
 [dependencies]
-tpt-chisel-core = { path = "../core" }
+tpt-chisel-core = { path = "../core", version = "0.1" }
 tokio.workspace = true
 anyhow.workspace = true
 clap = { version = "4", features = ["derive"] }

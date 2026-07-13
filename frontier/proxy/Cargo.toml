@@ -1,8 +1,13 @@
 [package]
 name = "tpt-frontier-proxy"
+description = "Wasm-native edge service mesh and API gateway with hot-reloadable Wasm plugins and HTTP/1.1+2 support."
 version.workspace = true
 edition.workspace = true
 license.workspace = true
+repository.workspace = true
+readme = "README.md"
+keywords = ["wasm", "proxy", "gateway", "mesh", "edge"]
+categories = ["wasm", "network-programming", "web-programming"]
 
 [dependencies]
 tokio.workspace = true

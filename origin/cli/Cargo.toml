@@ -1,15 +1,20 @@
 [package]
 name = "tpt-origin"
+description = "CLI for TPT Origin — unified local sandbox with OCI containers, Wasm modules, and process lifecycle management."
 version.workspace = true
 edition.workspace = true
 license.workspace = true
+repository.workspace = true
+readme = "README.md"
+keywords = ["container", "wasm", "sandbox", "cli", "dev"]
+categories = ["command-line-utilities", "development-tools"]
 
 [[bin]]
 name = "tpt"
 path = "src/main.rs"
 
 [dependencies]
-tpt-origin-core = { path = "../core" }
+tpt-origin-core = { path = "../core", version = "0.1" }
 tokio.workspace = true
 anyhow.workspace = true
 clap = { version = "4", features = ["derive"] }

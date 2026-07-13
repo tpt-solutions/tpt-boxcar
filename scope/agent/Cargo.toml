@@ -1,8 +1,13 @@
 [package]
 name = "tpt-scope-agent"
+description = "Host-side observability agent for TPT Scope: collects metrics, traces, and eBPF events and forwards them via OTLP to the Scope ingest pipeline."
 version.workspace = true
 edition.workspace = true
 license.workspace = true
+repository.workspace = true
+readme = "README.md"
+keywords = ["observability", "otlp", "tracing", "ebpf", "metrics"]
+categories = ["development-tools", "network-programming"]
 
 [dependencies]
 tokio.workspace = true
@@ -19,7 +24,7 @@ opentelemetry-semantic-conventions = "0.16"
 prost = "0.13"
 
 [target.'cfg(target_os = "linux")'.dependencies]
-scope-ebpf-loader = { path = "../ebpf/loader", optional = true }
+scope-ebpf-loader = { path = "../ebpf/loader", version = "0.1", optional = true }
 
 [features]
 # Off by default: pulls in `scope-ebpf-loader` (and transitively `aya`),

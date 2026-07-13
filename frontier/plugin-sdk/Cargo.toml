@@ -1,8 +1,13 @@
 [package]
 name = "tpt-frontier-plugin-sdk"
+description = "Rust SDK for authoring Wasm plugins for the TPT Frontier edge gateway and service mesh."
 version.workspace = true
 edition.workspace = true
 license.workspace = true
+repository.workspace = true
+readme = "README.md"
+keywords = ["wasm", "plugin", "sdk", "gateway", "frontier"]
+categories = ["wasm", "web-programming"]
 
 [dependencies]
 serde.workspace = true
