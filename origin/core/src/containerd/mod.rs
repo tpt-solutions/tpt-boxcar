@@ -315,10 +315,6 @@ impl ContainerdClient {
         if let Some(bytes) = spec.memory_limit_bytes {
             args.push("--memory-limit".to_string());
             args.push(bytes.to_string());
-            // Set swap equal to memory limit so no additional swap is allowed,
-            // ensuring the cgroup OOM killer fires on CI runners that have swap.
-            args.push("--memory-swap-limit".to_string());
-            args.push(bytes.to_string());
         }
         if let Some(cpus) = spec.cpu_limit {
             args.push("--cpus".to_string());
@@ -699,10 +695,25 @@ mod tests {
             security: None,
         };
 
-        client
+        let pid = client
             .run_container(&container_id, &spec)
             .await
             .expect("should really create and start the container's task");
+
+        // Disable swap in the container's cgroup so the OOM killer fires
+        // reliably on CI runners that have swap space available.  `ctr run`
+        // has no --memory-swap-limit flag, so we write directly to the
+        // cgroupv2 control file via the pid returned by run_container.
+        if let Ok(cgroup_content) = std::fs::read_to_string(format!("/proc/{pid}/cgroup")) {
+            if let Some(cgroup_path) = cgroup_content
+                .lines()
+                .find(|l| l.starts_with("0::/"))
+                .and_then(|l| l.split("::").nth(1))
+            {
+                let swap_max = format!("/sys/fs/cgroup{cgroup_path}/memory.swap.max");
+                let _ = std::fs::write(&swap_max, "0");
+            }
+        }
 
         let mut tasks = TasksClient::new(client.channel.clone());
         let wait_req = WaitRequest {

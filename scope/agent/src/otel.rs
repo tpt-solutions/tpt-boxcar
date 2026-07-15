@@ -191,7 +191,7 @@ impl OtelExporter {
         enrichment: Option<&EnrichmentData>,
     ) {
         let mut attributes = vec![
-            KeyValue::new("syscall.nr", sys_event.syscall_nr as i64),
+            KeyValue::new("syscall.nr", sys_event.syscall_nr),
             KeyValue::new("event.type", format!("{:?}", sys_event.event_type)),
             KeyValue::new("process.pid", _event.pid as i64),
             KeyValue::new("process.comm", _event.comm.clone()),

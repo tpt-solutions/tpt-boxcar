@@ -13,7 +13,7 @@ pub enum EnrichmentError {
     MetadataError(String),
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct EnrichmentData {
     pub container_id: String,
     pub image_name: String,
@@ -27,27 +27,16 @@ pub struct EnrichmentData {
     pub pid: u32,
 }
 
-impl Default for EnrichmentData {
-    fn default() -> Self {
-        Self {
-            container_id: String::new(),
-            image_name: String::new(),
-            image_tag: String::new(),
-            pod_name: String::new(),
-            namespace: String::new(),
-            node_name: String::new(),
-            container_name: String::new(),
-            labels: HashMap::new(),
-            annotations: HashMap::new(),
-            pid: 0,
-        }
-    }
-}
-
 pub struct EnrichmentProvider {
     cache: HashMap<u32, EnrichmentData>,
     _cgroup_path: PathBuf,
     proc_path: PathBuf,
+}
+
+impl Default for EnrichmentProvider {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl EnrichmentProvider {
