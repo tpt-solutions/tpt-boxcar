@@ -100,6 +100,12 @@ pub struct UpstreamManager {
     pools: RwLock<Vec<Arc<UpstreamPool>>>,
 }
 
+impl Default for UpstreamManager {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl UpstreamManager {
     pub fn new() -> Self {
         Self {

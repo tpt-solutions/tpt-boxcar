@@ -180,6 +180,7 @@ impl RedisWireDriver {
         Self::read_frame(stream).await
     }
 
+    #[allow(dead_code)]
     async fn send_and_read_multi(&self, all_args: &[Vec<&str>]) -> Result<Vec<RespFrame>> {
         let mut guard = self.stream.lock().await;
         let stream = guard.as_mut().context("not connected")?;
@@ -369,11 +370,8 @@ impl RedisWireDriver {
 
         let frame = self.send_and_read(&arg_refs).await?;
 
-        match &frame {
-            RespFrame::Error(e) => {
-                bail!("Redis error: {}", e);
-            }
-            _ => {}
+        if let RespFrame::Error(e) = &frame {
+            bail!("Redis error: {}", e);
         }
 
         let json_val = Self::frame_to_json(&frame);

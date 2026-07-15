@@ -562,7 +562,7 @@ impl MysqlWireDriver {
             exec_payload.push(0x00);
             exec_payload.extend_from_slice(&1u32.to_le_bytes());
 
-            let null_bitmap_len = (params.len() + 7) / 8;
+            let null_bitmap_len = params.len().div_ceil(8);
             let mut null_bitmap = vec![0u8; null_bitmap_len];
             for (i, p) in params.iter().enumerate() {
                 if p.is_null() {

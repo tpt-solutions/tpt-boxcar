@@ -138,6 +138,7 @@ struct ConfigSnapshot {
 }
 
 #[derive(Debug, serde::Deserialize)]
+#[allow(dead_code)]
 struct RouteSnapshot {
     name: String,
     #[serde(default)]
@@ -152,6 +153,7 @@ struct RouteSnapshot {
 }
 
 #[derive(Debug, serde::Deserialize)]
+#[allow(dead_code)]
 struct UpstreamSnapshot {
     name: String,
     #[serde(default)]
@@ -251,7 +253,7 @@ impl ConfigWatcher {
 
         // Build upstreams (load balancers) from snapshot
         let upstreams = snap.upstreams.unwrap_or_default();
-        for (_name, us) in &upstreams {
+        for us in upstreams.values() {
             let endpoints: Vec<BackendEndpoint> = us
                 .endpoints
                 .iter()
@@ -271,7 +273,7 @@ impl ConfigWatcher {
 
         // Build route rules from snapshot
         let routes = snap.routes.unwrap_or_default();
-        for (_name, rs) in &routes {
+        for rs in routes.values() {
             let rule = RouteRule {
                 path_prefix: rs.prefix.clone(),
                 headers: rs.headers.clone().unwrap_or_default(),
