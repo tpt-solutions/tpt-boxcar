@@ -36,6 +36,7 @@ pub struct BuildResult {
 }
 
 /// Recursively deletes a directory and all its contents, ignoring errors.
+#[allow(dead_code)]
 fn cleanup_dir(path: &Path) {
     let _ = std::fs::remove_dir_all(path);
 }
@@ -54,6 +55,7 @@ fn run_cmd(cmd: &str, args: &[&str]) -> Result<String> {
 }
 
 /// Runs a shell command, inheriting stdio (for interactive/verbose output).
+#[allow(dead_code)]
 fn run_cmd_stdio(cmd: &str, args: &[&str]) -> Result<()> {
     let status = std::process::Command::new(cmd)
         .args(args)

@@ -51,6 +51,10 @@ fn flywheel_manifest(wasm_path: std::path::PathBuf) -> Manifest {
             secrets: None,
             security: None,
             logging: None,
+            healthcheck: None,
+            profiles: vec![],
+            configs: None,
+            extends: None,
         }),
     );
 
@@ -74,6 +78,10 @@ fn flywheel_manifest(wasm_path: std::path::PathBuf) -> Manifest {
             secrets: None,
             security: None,
             logging: None,
+            healthcheck: None,
+            profiles: vec![],
+            configs: None,
+            extends: None,
         }),
     );
 
@@ -91,6 +99,10 @@ fn flywheel_manifest(wasm_path: std::path::PathBuf) -> Manifest {
             secrets: None,
             security: None,
             logging: None,
+            healthcheck: None,
+            profiles: vec![],
+            configs: None,
+            extends: None,
         }),
     );
 
@@ -99,6 +111,10 @@ fn flywheel_manifest(wasm_path: std::path::PathBuf) -> Manifest {
         "internal".to_string(),
         tpt_origin_core::manifest::Network {
             driver: "bridge".to_string(),
+            subnet: None,
+            gateway: None,
+            vni: None,
+            peers: vec![],
         },
     );
 
@@ -117,6 +133,8 @@ fn flywheel_manifest(wasm_path: std::path::PathBuf) -> Manifest {
         networks,
         volumes,
         logging: None,
+        configs: HashMap::new(),
+        secrets: HashMap::new(),
     }
 }
 

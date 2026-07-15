@@ -356,7 +356,8 @@ async fn network_manager_creates_a_real_linux_bridge() {
 
     let bridge = net
         .get_bridge_interface()
-        .expect("real bridge device should have been created");
+        .expect("real bridge device should have been created")
+        .to_string();
     let output = std::process::Command::new("ip")
         .args(["link", "show", bridge])
         .output()

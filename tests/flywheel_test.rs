@@ -41,6 +41,15 @@ fn flywheel_manifest(wasm_path: std::path::PathBuf) -> Manifest {
             depends_on: vec![],
             healthcheck: None,
             resources: None,
+            restart_policy: Default::default(),
+            env_file: None,
+            secrets: None,
+            security: None,
+            logging: None,
+            profiles: vec![],
+            build: None,
+            configs: None,
+            extends: None,
         }),
     );
 
@@ -49,14 +58,25 @@ fn flywheel_manifest(wasm_path: std::path::PathBuf) -> Manifest {
         Service::Wasm(WasmService {
             path: wasm_path,
             args: vec!["--port".to_string(), "8080".to_string()],
+            ports: vec![],
             environment: HashMap::from([(
                 "DATABASE_URL".to_string(),
                 "postgres://test@db/app".to_string(),
             )]),
             memory_limit: Some("256m".to_string()),
+            resources: None,
             depends_on: vec!["db".to_string()],
             expected_signature: None,
             trusted_public_key: None,
+            restart_policy: Default::default(),
+            env_file: None,
+            secrets: None,
+            security: None,
+            logging: None,
+            healthcheck: None,
+            profiles: vec![],
+            configs: None,
+            extends: None,
         }),
     );
 
@@ -75,6 +95,15 @@ fn flywheel_manifest(wasm_path: std::path::PathBuf) -> Manifest {
             depends_on: vec!["api".to_string()],
             healthcheck: None,
             resources: None,
+            restart_policy: Default::default(),
+            env_file: None,
+            secrets: None,
+            security: None,
+            logging: None,
+            profiles: vec![],
+            build: None,
+            configs: None,
+            extends: None,
         }),
     );
 
@@ -83,6 +112,10 @@ fn flywheel_manifest(wasm_path: std::path::PathBuf) -> Manifest {
         "internal".to_string(),
         tpt_origin_core::manifest::Network {
             driver: "bridge".to_string(),
+            subnet: None,
+            gateway: None,
+            vni: None,
+            peers: vec![],
         },
     );
 
@@ -100,6 +133,9 @@ fn flywheel_manifest(wasm_path: std::path::PathBuf) -> Manifest {
         services,
         networks,
         volumes,
+        logging: None,
+        configs: HashMap::new(),
+        secrets: HashMap::new(),
     }
 }
 
