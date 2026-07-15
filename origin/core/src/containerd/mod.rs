@@ -315,6 +315,10 @@ impl ContainerdClient {
         if let Some(bytes) = spec.memory_limit_bytes {
             args.push("--memory-limit".to_string());
             args.push(bytes.to_string());
+            // Set swap equal to memory limit so no additional swap is allowed,
+            // ensuring the cgroup OOM killer fires on CI runners that have swap.
+            args.push("--memory-swap-limit".to_string());
+            args.push(bytes.to_string());
         }
         if let Some(cpus) = spec.cpu_limit {
             args.push("--cpus".to_string());

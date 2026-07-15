@@ -326,7 +326,8 @@ CMD ["nginx", "-g", "daemon off;"]
 
     #[test]
     fn parses_line_continuations() {
-        let input = "RUN apt-get update && \\\n    apt-get install -y \\\n    curl wget\n";
+        let input =
+            "FROM alpine\nRUN apt-get update && \\\n    apt-get install -y \\\n    curl wget\n";
         let df = parse(input).unwrap();
         assert_eq!(df.stages.len(), 1);
         assert_eq!(df.stages[0].instructions.len(), 1);

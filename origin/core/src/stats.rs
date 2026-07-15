@@ -164,7 +164,12 @@ pub fn format_bytes(bytes: u64) -> String {
     } else if bytes >= 1024 * 1024 {
         format!("{:.1}MB", bytes as f64 / (1024.0 * 1024.0))
     } else if bytes >= 1024 {
-        format!("{:.0}KB", bytes as f64 / 1024.0)
+        let kb = bytes as f64 / 1024.0;
+        if kb.fract() == 0.0 {
+            format!("{:.0}KB", kb)
+        } else {
+            format!("{:.1}KB", kb)
+        }
     } else {
         format!("{bytes}B")
     }
