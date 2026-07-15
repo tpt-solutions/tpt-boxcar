@@ -305,7 +305,7 @@ impl LifecycleManager {
         }
         self.network_names = manifest.networks.keys().cloned().collect();
 
-        for (name, _service) in &manifest.services {
+        for name in manifest.services.keys() {
             self.dns
                 .add_entry(name, &format!("10.0.0.{}", self.health.len() + 2), None);
             self.health.insert(

@@ -86,9 +86,7 @@ fn short_image_name(image_ref: &str) -> String {
 /// Build a unique container ID for a build stage that won't collide with
 /// running service containers.
 fn build_container_id(stage_idx: usize, image_ref: &str) -> String {
-    let short = short_image_name(image_ref)
-        .replace('/', "-")
-        .replace(':', "-");
+    let short = short_image_name(image_ref).replace(['/', ':'], "-");
     format!("tpt-build-s{stage_idx}-{short}-{}", std::process::id())
 }
 
@@ -459,9 +457,7 @@ fn execute_stage(
                 // ARG KEY or ARG KEY=DEFAULT
                 let (key, value) = parse_arg_decl(&instr.args);
                 // Build-arg overrides take precedence over Dockerfile ARG defaults.
-                if !env.contains_key(&key) {
-                    env.insert(key, value);
-                }
+                env.entry(key).or_insert(value);
             }
             Keyword::Workdir => {
                 let new_workdir = instr.args.trim().trim_matches('"').trim_matches('\'');

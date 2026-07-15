@@ -111,7 +111,7 @@ pub enum BuildConfig {
     /// Simple form: just a path to the build context.
     Path(String),
     /// Detailed form with full build options.
-    Details(BuildDetails),
+    Details(Box<BuildDetails>),
 }
 
 /// Detailed build configuration, analogous to Docker Compose's `build:` object.
@@ -254,7 +254,7 @@ fn default_device_permissions() -> String {
 #[serde(tag = "type")]
 pub enum Service {
     #[serde(rename = "oci")]
-    OCI(OCIService),
+    OCI(Box<OCIService>),
     #[serde(rename = "wasm")]
     Wasm(WasmService),
     #[serde(rename = "process")]
@@ -1046,7 +1046,7 @@ fn resolve_extends_recursive(
             if oci.configs.is_some() {
                 merged.configs = oci.configs.clone();
             }
-            target.insert(name.to_string(), Service::OCI(merged));
+            target.insert(name.to_string(), Service::OCI(Box::new(merged)));
         }
         (Service::Wasm(wasm), Service::Wasm(base_wasm)) => {
             let mut merged = base_wasm.clone();
