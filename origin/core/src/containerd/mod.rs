@@ -680,13 +680,16 @@ mod tests {
             command: Some(vec![
                 "sh".to_string(),
                 "-c".to_string(),
-                // Attempts to write far more than the memory limit below;
-                // if the limit is real, the kernel OOM-kills this before it
-                // can complete.
-                "dd if=/dev/zero of=/dev/shm/fill bs=1M count=256".to_string(),
+                // Exponentially doubles a shell string variable (heap/anonymous
+                // memory via malloc).  Hits ~16 MiB in ~24 iterations, at which
+                // point the cgroup OOM killer delivers SIGKILL (exit 137).
+                // Writing to /dev/shm (tmpfs) was unreliable: the write(2)
+                // syscall fails with ENOSPC rather than the process being
+                // killed, producing exit code 1 instead of 137.
+                "s=a; while true; do s=\"$s$s\"; done".to_string(),
             ]),
             env: HashMap::new(),
-            memory_limit_bytes: Some(16 * 1024 * 1024), // 16MiB, far below the 256MiB write attempted above
+            memory_limit_bytes: Some(16 * 1024 * 1024), // 16 MiB — the doubling loop exceeds this quickly
             cpu_limit: None,
             mounts: Vec::new(),
             security: None,
