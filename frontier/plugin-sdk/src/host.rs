@@ -20,6 +20,12 @@ pub struct LogEntry {
     pub timestamp: String,
 }
 
+impl Default for HostState {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl HostState {
     pub fn new() -> Self {
         Self {
@@ -104,6 +110,12 @@ struct LoadedPlugin {
     name: String,
     manifest: PluginManifest,
     enabled: bool,
+}
+
+impl Default for PluginManager {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl PluginManager {
