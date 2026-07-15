@@ -12,7 +12,7 @@ use std::path::{Path, PathBuf};
 use anyhow::{bail, Context, Result};
 use sha2::{Digest, Sha256};
 
-use crate::dockerfile::{self, FromDirective, Instruction, Keyword, Stage};
+use crate::dockerfile::{self, Keyword, Stage};
 
 /// Configuration for a build invocation.
 pub struct BuildConfig {
@@ -150,7 +150,7 @@ fn capture_layer_via_ctr(socket: &Path, namespace: &str, container_id: &str) -> 
     // Use `ctr snapshot diff` to produce a tar of changes vs parent.
     // If the snapshot has no parent (first layer from base image), we
     // capture the entire snapshot content.
-    let parent_key = info["snapshotKey"].as_str().map(|_| {
+    let _parent_key = info["snapshotKey"].as_str().map(|_| {
         // Compute parent: strip the last component.
         // containerd snapshot keys look like
         // "build-<id>-<sha>-0", "build-<id>-<sha>-1", etc.
@@ -536,6 +536,10 @@ fn execute_stage(
                     "stage {stage_idx}: ONBUILD is not supported during build, skipping"
                 );
             }
+            Keyword::From => {
+                // FROM is the stage header — already processed by the caller;
+                // it never appears as an instruction within a stage's body.
+            }
         }
     }
 
@@ -606,7 +610,7 @@ fn inject_file_into_container(
 ) -> Result<()> {
     // Create a tar of the source file/directory and pipe it into the
     // container via `ctr tasks exec` + `tar -xf -`.
-    let tar_child = std::process::Command::new("tar")
+    let mut tar_child = std::process::Command::new("tar")
         .args(["-cf", "-", "-C"])
         .arg(host_src.parent().unwrap_or_else(|| Path::new(".")))
         .arg(
@@ -647,7 +651,7 @@ fn inject_file_into_container(
         container_dest.to_string()
     };
 
-    let mut untar = std::process::Command::new("ctr")
+    let untar = std::process::Command::new("ctr")
         .args([
             "--address",
             &socket.to_string_lossy(),
@@ -666,7 +670,7 @@ fn inject_file_into_container(
             "-C",
             &dest_dir,
         ])
-        .stdin(tar_child.stdout.unwrap())
+        .stdin(tar_child.stdout.take().unwrap())
         .output()
         .with_context(|| "failed to exec `tar -xf` in container for COPY")?;
 
@@ -763,7 +767,7 @@ fn next_build_exec_id() -> u64 {
 /// containerd's image store.
 fn compose_oci_image(
     config: &BuildConfig,
-    stage_name: &str,
+    _stage_name: &str,
     layers: &[Vec<u8>],
     cmd: Option<Vec<String>>,
     entrypoint: Option<Vec<String>>,
@@ -903,9 +907,10 @@ fn compose_oci_image(
     }
 
     // ── 4. Create the image record in containerd ──
+    let socket_lossy = socket.to_string_lossy();
     let mut image_cmd = vec![
         "--address",
-        &socket.to_string_lossy(),
+        &socket_lossy,
         "--namespace",
         namespace,
         "images",
@@ -978,7 +983,7 @@ pub fn build(config: &BuildConfig) -> Result<BuildResult> {
                 .unwrap_or_default()
         );
 
-        let (image_ref, final_fs, layers) = execute_stage(
+        let (_image_ref, final_fs, layers) = execute_stage(
             config,
             stage_idx,
             stage,
