@@ -359,7 +359,7 @@ async fn network_manager_creates_a_real_linux_bridge() {
         .expect("real bridge device should have been created")
         .to_string();
     let output = std::process::Command::new("ip")
-        .args(["link", "show", bridge])
+        .args(["link", "show", &bridge])
         .output()
         .expect("failed to run `ip link show`");
     assert!(
@@ -369,7 +369,7 @@ async fn network_manager_creates_a_real_linux_bridge() {
 
     net.delete_network("real-bridge-test").await.unwrap();
     let after = std::process::Command::new("ip")
-        .args(["link", "show", bridge])
+        .args(["link", "show", &bridge])
         .output()
         .expect("failed to run `ip link show`");
     assert!(
