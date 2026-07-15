@@ -1,7 +1,7 @@
 use anyhow::Context;
 use clap::{Parser, Subcommand};
 use std::collections::HashMap;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 mod state;
 
@@ -285,7 +285,7 @@ async fn main() -> anyhow::Result<()> {
 
 const MANIFEST_TEMPLATE: &str = include_str!("../../examples/getting-started/manifest.yaml");
 
-async fn cmd_init(dir: &PathBuf) -> anyhow::Result<()> {
+async fn cmd_init(dir: &Path) -> anyhow::Result<()> {
     let manifest_path = dir.join("manifest.yaml");
     if manifest_path.exists() {
         anyhow::bail!("manifest.yaml already exists in {}", dir.display());
@@ -321,7 +321,7 @@ async fn cmd_up(
 
     // Interpolate environment variables in service configurations
     let system_env: HashMap<String, String> = std::env::vars().collect();
-    for (_name, service) in manifest.services.iter_mut() {
+    for service in manifest.services.values_mut() {
         interpolate_service_env(service, &system_env, env_overrides);
     }
 
@@ -447,7 +447,7 @@ async fn run_with_watch(
     let mut watch_dirs: Vec<std::path::PathBuf> = Vec::new();
     let manifest_dir = manifest_path_for(manifest);
 
-    for (_name, service) in &manifest.services {
+    for service in manifest.services.values() {
         match service {
             tpt_origin_core::manifest::Service::Wasm(wasm) => {
                 if let Some(parent) = wasm.path.parent() {
@@ -524,27 +524,24 @@ async fn run_with_watch(
                 }
             }
             event = rx.recv() => {
-                match event {
-                    Some(Ok(Event { kind: EventKind::Modify(_), paths, .. })) => {
-                        if last_restart.elapsed() < std::time::Duration::from_millis(500) {
-                            continue; // debounce
-                        }
-                        // Find which services are affected by the changed files
-                        let affected = find_affected_services(&paths, manifest, &manifest_dir);
-                        if affected.is_empty() {
-                            continue;
-                        }
-                        last_restart = std::time::Instant::now();
-                        for service_name in &affected {
-                            println!("\nDetected change in '{service_name}', restarting...");
-                            if let Err(e) = origin.restart_service(service_name, manifest).await {
-                                tracing::warn!("failed to restart '{service_name}': {e}");
-                            } else {
-                                println!("Restarted '{service_name}' successfully.");
-                            }
+                if let Some(Ok(Event { kind: EventKind::Modify(_), paths, .. })) = event {
+                    if last_restart.elapsed() < std::time::Duration::from_millis(500) {
+                        continue; // debounce
+                    }
+                    // Find which services are affected by the changed files
+                    let affected = find_affected_services(&paths, manifest, &manifest_dir);
+                    if affected.is_empty() {
+                        continue;
+                    }
+                    last_restart = std::time::Instant::now();
+                    for service_name in &affected {
+                        println!("\nDetected change in '{service_name}', restarting...");
+                        if let Err(e) = origin.restart_service(service_name, manifest).await {
+                            tracing::warn!("failed to restart '{service_name}': {e}");
+                        } else {
+                            println!("Restarted '{service_name}' successfully.");
                         }
                     }
-                    _ => {} // ignore other event types and errors
                 }
             }
         }
@@ -921,13 +918,13 @@ fn exec_process(cmd: &[String]) -> anyhow::Result<()> {
                     } else if let KeyCode::Char(c) = key.code {
                         master_writer.write_all(&[c as u8])?;
                     } else if key.code == KeyCode::Enter {
-                        master_writer.write_all(&[b'\r'])?;
+                        master_writer.write_all(b"\r")?;
                     } else if key.code == KeyCode::Backspace {
                         master_writer.write_all(&[0x7f])?;
                     } else if let KeyCode::Esc = key.code {
                         master_writer.write_all(&[0x1b])?;
                     } else if let KeyCode::Tab = key.code {
-                        master_writer.write_all(&[b'\t'])?;
+                        master_writer.write_all(b"\t")?;
                     } else if let KeyCode::Up = key.code {
                         master_writer.write_all(b"\x1b[A")?;
                     } else if let KeyCode::Down = key.code {
@@ -1244,12 +1241,12 @@ fn print_stats_table(stats: &[tpt_origin_core::stats::ServiceStats]) {
 
         let mem_str = s
             .memory_rss_bytes
-            .map(|b| tpt_origin_core::stats::format_bytes(b))
+            .map(tpt_origin_core::stats::format_bytes)
             .unwrap_or_else(|| "N/A".to_string());
 
         let limit_str = s
             .memory_limit_bytes
-            .map(|b| tpt_origin_core::stats::format_bytes(b))
+            .map(tpt_origin_core::stats::format_bytes)
             .unwrap_or_else(|| "unlimited".to_string());
 
         let net_str = match (s.net_rx_bytes, s.net_tx_bytes) {
@@ -1439,7 +1436,7 @@ async fn cmd_push(image: &str, config_path: Option<&PathBuf>) -> anyhow::Result<
 
     // Handle authentication via Docker config.json
     let effective_config = config_path.map(|p| p.to_path_buf()).or_else(|| {
-        let home = std::env::var("HOME").ok().or_else(|| {
+        let home = std::env::var("HOME").ok().or({
             #[cfg(windows)]
             {
                 std::env::var("USERPROFILE").ok()
@@ -1792,11 +1789,11 @@ async fn cmd_cp(source: &str, destination: &str) -> anyhow::Result<()> {
     match (src_container, dst_container) {
         // Host -> Container
         (None, Some(container_id)) => {
-            copy_to_container(&container_id, &src_path, &dst_path).await?;
+            copy_to_container(container_id, &src_path, &dst_path).await?;
         }
         // Container -> Host
         (Some(container_id), None) => {
-            copy_from_container(&container_id, &src_path, &dst_path).await?;
+            copy_from_container(container_id, &src_path, &dst_path).await?;
         }
         // Container -> Container
         (Some(_), Some(_)) => {
