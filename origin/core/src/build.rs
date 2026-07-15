@@ -544,11 +544,8 @@ fn execute_stage(
     }
 
     // ── 4. Export the final stage filesystem ──
-    let stage_name = stage
-        .from
-        .alias
-        .as_deref()
-        .unwrap_or(&format!("stage-{stage_idx}"));
+    let stage_name_default = format!("stage-{stage_idx}");
+    let stage_name = stage.from.alias.as_deref().unwrap_or(&stage_name_default);
     let final_image_ref = format!(
         "tpt-boxcar/build/{}:{}",
         short_image_name(&base_ref).replace('/', "-"),

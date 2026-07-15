@@ -656,13 +656,11 @@ impl RuntimeManager {
                                 );
                             }
                             if memory_bytes.is_some() {
-                                unsafe { crate::reslimit::apply_rlimits(memory_bytes, None) };
+                                crate::reslimit::apply_rlimits(memory_bytes, None);
                             }
                         }
                         if has_security {
-                            unsafe {
-                                security::apply_security_pre_exec(&security_config);
-                            }
+                            security::apply_security_pre_exec(&security_config);
                         }
                         Ok(())
                     });
