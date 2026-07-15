@@ -165,7 +165,7 @@ async fn cargo_metadata(dir: &Path) -> Result<serde_json::Value> {
         "cargo metadata failed: {}",
         String::from_utf8_lossy(&output.stderr)
     );
-    Ok(serde_json::from_slice(&output.stdout).context("failed to parse cargo metadata JSON")?)
+    serde_json::from_slice(&output.stdout).context("failed to parse cargo metadata JSON")
 }
 
 /// Locates the real `[[bin]]` target name for `dir`'s package, needed

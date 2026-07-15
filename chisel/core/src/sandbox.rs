@@ -83,6 +83,7 @@ pub enum SandboxStatus {
     Failed,
 }
 
+#[allow(async_fn_in_trait)]
 pub trait SandboxProvider: Send + Sync {
     async fn start_sandbox(&self, config: &SandboxConfig) -> Result<SandboxInfo>;
     async fn stop_sandbox(&self, sandbox_id: &str) -> Result<()>;
