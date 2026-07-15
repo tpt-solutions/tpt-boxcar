@@ -1046,7 +1046,7 @@ fn resolve_extends_recursive(
             if oci.configs.is_some() {
                 merged.configs = oci.configs.clone();
             }
-            target.insert(name.to_string(), Service::OCI(Box::new(merged)));
+            target.insert(name.to_string(), Service::OCI(merged));
         }
         (Service::Wasm(wasm), Service::Wasm(base_wasm)) => {
             let mut merged = base_wasm.clone();
