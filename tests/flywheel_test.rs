@@ -21,7 +21,7 @@ fn flywheel_manifest(wasm_path: std::path::PathBuf) -> Manifest {
 
     services.insert(
         "db".to_string(),
-        Service::OCI(OCIService {
+        Service::OCI(Box::new(OCIService {
             image: "postgres:16-alpine".to_string(),
             ports: vec![PortMapping {
                 host: 5432,
@@ -50,7 +50,7 @@ fn flywheel_manifest(wasm_path: std::path::PathBuf) -> Manifest {
             build: None,
             configs: None,
             extends: None,
-        }),
+        })),
     );
 
     services.insert(
@@ -82,7 +82,7 @@ fn flywheel_manifest(wasm_path: std::path::PathBuf) -> Manifest {
 
     services.insert(
         "proxy".to_string(),
-        Service::OCI(OCIService {
+        Service::OCI(Box::new(OCIService {
             image: "nginx:alpine".to_string(),
             ports: vec![PortMapping {
                 host: 443,
@@ -104,7 +104,7 @@ fn flywheel_manifest(wasm_path: std::path::PathBuf) -> Manifest {
             build: None,
             configs: None,
             extends: None,
-        }),
+        })),
     );
 
     let mut networks = HashMap::new();
