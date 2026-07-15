@@ -121,14 +121,7 @@ impl NetworkManager {
         let bridge_name = if self.rootless {
             create_rootless_network(&config.name, &gateway, prefix_len).await
         } else {
-            create_platform_bridge(
-                &config.name,
-                &gateway,
-                prefix_len,
-                &gateway6,
-                prefix6_len,
-            )
-            .await
+            create_platform_bridge(&config.name, &gateway, prefix_len, &gateway6, prefix6_len).await
         };
 
         if bridge_name.is_none() {
@@ -201,9 +194,7 @@ impl NetworkManager {
 
     /// The IPv6 gateway address assigned to a network's bridge/switch.
     pub fn network_gateway6(&self, network_name: &str) -> Option<&str> {
-        self.networks
-            .get(network_name)
-            .map(|n| n.gateway6.as_str())
+        self.networks.get(network_name).map(|n| n.gateway6.as_str())
     }
 
     /// The driver a network was created with (as recorded in the manifest).
@@ -461,7 +452,9 @@ async fn create_platform_bridge(
     )
     .await;
     if !matches!(&addr6, Ok(o) if succeeded_or_already_exists(o)) {
-        tracing::warn!("failed to assign IPv6 gateway address {gateway6}/{prefix6_len} to {bridge}");
+        tracing::warn!(
+            "failed to assign IPv6 gateway address {gateway6}/{prefix6_len} to {bridge}"
+        );
     }
 
     match run("ip", &["link", "set", &bridge, "up"]).await {
@@ -487,7 +480,12 @@ async fn create_platform_bridge(
 /// <peer>`) instead of multicast, so it works across networks/clouds that
 /// don't route multicast.
 #[cfg(target_os = "linux")]
-async fn attach_overlay_uplink(network_name: &str, bridge: &str, vni: u32, peers: &[String]) -> bool {
+async fn attach_overlay_uplink(
+    network_name: &str,
+    bridge: &str,
+    vni: u32,
+    peers: &[String],
+) -> bool {
     let vxlan = vxlan_name_for(network_name);
     tracing::info!(
         "Creating VXLAN uplink {vxlan} (vni {vni}) for overlay network {network_name}, \
@@ -512,7 +510,9 @@ async fn attach_overlay_uplink(network_name: &str, bridge: &str, vni: u32, peers
     {
         Ok(o) => o,
         Err(e) => {
-            tracing::warn!("failed to invoke `ip link add type vxlan` (is iproute2 installed?): {e}");
+            tracing::warn!(
+                "failed to invoke `ip link add type vxlan` (is iproute2 installed?): {e}"
+            );
             return false;
         }
     };
@@ -558,7 +558,15 @@ async fn attach_overlay_uplink(network_name: &str, bridge: &str, vni: u32, peers
     for peer in peers {
         match run(
             "bridge",
-            &["fdb", "append", "00:00:00:00:00:00", "dst", peer, "dev", &vxlan],
+            &[
+                "fdb",
+                "append",
+                "00:00:00:00:00:00",
+                "dst",
+                peer,
+                "dev",
+                &vxlan,
+            ],
         )
         .await
         {
@@ -581,7 +589,9 @@ async fn attach_overlay_uplink(
     _vni: u32,
     _peers: &[String],
 ) -> bool {
-    tracing::warn!("overlay networks require a real VXLAN device, which this platform doesn't support here");
+    tracing::warn!(
+        "overlay networks require a real VXLAN device, which this platform doesn't support here"
+    );
     false
 }
 

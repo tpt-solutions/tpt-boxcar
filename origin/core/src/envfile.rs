@@ -32,15 +32,13 @@ pub fn parse_env_file(path: &Path) -> Result<HashMap<String, String>> {
         if line.is_empty() || line.starts_with('#') {
             continue;
         }
-        let (key, value) = line
-            .split_once('=')
-            .with_context(|| {
-                format!(
-                    "invalid env file line {} in '{}': expected KEY=VALUE",
-                    line_num + 1,
-                    path.display()
-                )
-            })?;
+        let (key, value) = line.split_once('=').with_context(|| {
+            format!(
+                "invalid env file line {} in '{}': expected KEY=VALUE",
+                line_num + 1,
+                path.display()
+            )
+        })?;
         let key = key.trim().to_string();
         let value = strip_quotes(value.trim());
         vars.insert(key, value);

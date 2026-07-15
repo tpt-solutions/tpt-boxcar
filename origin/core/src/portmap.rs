@@ -58,8 +58,13 @@ impl PortMapper {
                 "port mapping: {service_name} {}:{host_port} → {target_addr}",
                 mapping.protocol,
             );
-            let handle =
-                spawn_accept_loop(listener, host_addr, service_name.to_string(), host_port, target_addr.clone());
+            let handle = spawn_accept_loop(
+                listener,
+                host_addr,
+                service_name.to_string(),
+                host_port,
+                target_addr.clone(),
+            );
 
             // IPv6 is best-effort: on hosts without IPv6, or where
             // `net.ipv6.bindv6only` already makes the v4 bind above cover

@@ -212,17 +212,30 @@ async fn main() -> anyhow::Result<()> {
     match cli.command {
         Commands::Origin { command } => match command {
             OriginCommands::Init { dir } => cmd_init(&dir).await,
-            OriginCommands::Up { manifest, watch, rootless, profiles, env_overrides } => {
+            OriginCommands::Up {
+                manifest,
+                watch,
+                rootless,
+                profiles,
+                env_overrides,
+            } => {
                 let profile_list = profiles
                     .as_deref()
-                    .map(|p| p.split(',').map(|s| s.trim().to_string()).collect::<Vec<_>>())
+                    .map(|p| {
+                        p.split(',')
+                            .map(|s| s.trim().to_string())
+                            .collect::<Vec<_>>()
+                    })
                     .unwrap_or_default();
                 let env_map = env_overrides
                     .iter()
-                    .filter_map(|e| e.split_once('=').map(|(k, v)| (k.to_string(), v.to_string())))
+                    .filter_map(|e| {
+                        e.split_once('=')
+                            .map(|(k, v)| (k.to_string(), v.to_string()))
+                    })
                     .collect();
                 cmd_up(&manifest, watch, rootless, &profile_list, &env_map).await
-            },
+            }
             OriginCommands::Down => cmd_down().await,
             OriginCommands::Ps => cmd_ps().await,
             OriginCommands::Logs { service, follow } => cmd_logs(&service, follow).await,
@@ -248,10 +261,16 @@ async fn main() -> anyhow::Result<()> {
             OriginCommands::Rmi { image } => cmd_rmi(&image).await,
             OriginCommands::Pull { image } => cmd_pull(&image).await,
             OriginCommands::Push { image, config } => cmd_push(&image, config.as_ref()).await,
-            OriginCommands::Events { manifest, filter, service, json } => {
-                cmd_events(&manifest, filter.as_deref(), service.as_deref(), json).await
-            },
-            OriginCommands::Cp { source, destination } => cmd_cp(&source, &destination).await,
+            OriginCommands::Events {
+                manifest,
+                filter,
+                service,
+                json,
+            } => cmd_events(&manifest, filter.as_deref(), service.as_deref(), json).await,
+            OriginCommands::Cp {
+                source,
+                destination,
+            } => cmd_cp(&source, &destination).await,
             OriginCommands::Pause { service } => cmd_pause(&service).await,
             OriginCommands::Unpause { service } => cmd_unpause(&service).await,
         },
@@ -259,7 +278,7 @@ async fn main() -> anyhow::Result<()> {
             let empty_profiles = Vec::new();
             let empty_env = HashMap::new();
             cmd_up(&manifest, false, false, &empty_profiles, &empty_env).await
-        },
+        }
         Commands::Down => cmd_down().await,
     }
 }
@@ -277,7 +296,13 @@ async fn cmd_init(dir: &PathBuf) -> anyhow::Result<()> {
     Ok(())
 }
 
-async fn cmd_up(manifest_path: &PathBuf, watch: bool, rootless: bool, profiles: &[String], env_overrides: &HashMap<String, String>) -> anyhow::Result<()> {
+async fn cmd_up(
+    manifest_path: &PathBuf,
+    watch: bool,
+    rootless: bool,
+    profiles: &[String],
+    env_overrides: &HashMap<String, String>,
+) -> anyhow::Result<()> {
     if !manifest_path.exists() {
         anyhow::bail!("Manifest not found: {}", manifest_path.display());
     }
@@ -438,7 +463,10 @@ async fn run_with_watch(
                     // Watch the directory containing the program binary/script
                     let path = std::path::Path::new(program);
                     if path.is_relative() {
-                        let dir = resolve_watch_dir(path.parent().unwrap_or(std::path::Path::new(".")), &manifest_dir);
+                        let dir = resolve_watch_dir(
+                            path.parent().unwrap_or(std::path::Path::new(".")),
+                            &manifest_dir,
+                        );
                         if !watch_dirs.contains(&dir) {
                             tracing::info!("watching process source dir: {}", dir.display());
                             watch_dirs.push(dir);
@@ -451,7 +479,9 @@ async fn run_with_watch(
     }
 
     if watch_dirs.is_empty() {
-        tracing::warn!("no watchable source directories found in manifest; --watch has nothing to monitor");
+        tracing::warn!(
+            "no watchable source directories found in manifest; --watch has nothing to monitor"
+        );
         run_supervisor(origin, manifest, state_dir).await?;
         return Ok(());
     }
@@ -463,8 +493,12 @@ async fn run_with_watch(
     println!("Press Ctrl+C to stop.\n");
 
     let (tx, mut rx) = mpsc::channel::<notify::Result<Event>>(64);
-    let mut watcher: RecommendedWatcher =
-        Watcher::new(move |res| { let _ = tx.blocking_send(res); }, notify::Config::default().with_poll_interval(std::time::Duration::from_secs(2)))?;
+    let mut watcher: RecommendedWatcher = Watcher::new(
+        move |res| {
+            let _ = tx.blocking_send(res);
+        },
+        notify::Config::default().with_poll_interval(std::time::Duration::from_secs(2)),
+    )?;
 
     for dir in &watch_dirs {
         watcher.watch(dir, RecursiveMode::Recursive)?;
@@ -611,7 +645,8 @@ fn interpolate_service_env(
         }
         tpt_origin_core::manifest::Service::Wasm(wasm) => {
             let path_str = wasm.path.to_string_lossy().to_string();
-            let interpolated = tpt_origin_core::manifest::interpolate_env(&path_str, env, overrides);
+            let interpolated =
+                tpt_origin_core::manifest::interpolate_env(&path_str, env, overrides);
             wasm.path = std::path::PathBuf::from(interpolated);
         }
         tpt_origin_core::manifest::Service::Process(process) => {
@@ -995,13 +1030,15 @@ async fn cmd_replay(manifest_path: &PathBuf, service: &str, scope_url: &str) -> 
     Ok(())
 }
 
-async fn cmd_inspect(service: &str, manifest_path: &PathBuf, json_output: bool) -> anyhow::Result<()> {
+async fn cmd_inspect(
+    service: &str,
+    manifest_path: &PathBuf,
+    json_output: bool,
+) -> anyhow::Result<()> {
     let content = std::fs::read_to_string(manifest_path)?;
     let manifest: tpt_origin_core::manifest::Manifest = serde_yaml::from_str(&content)?;
 
-    let env = state::read(std::path::Path::new("."))
-        .ok()
-        .flatten();
+    let env = state::read(std::path::Path::new(".")).ok().flatten();
 
     // Build an Origin instance to inspect from, using the manifest.
     let origin = tpt_origin_core::Origin::new(&manifest);
@@ -1017,9 +1054,16 @@ async fn cmd_inspect(service: &str, manifest_path: &PathBuf, json_output: bool) 
         if let Some(svc) = env.services.iter().find(|s| s.name == service) {
             println!("Service: {}", svc.name);
             println!("Type:    {}", svc.service_type);
-            println!("PID:     {}", svc.pid.map(|p| p.to_string()).unwrap_or_else(|| "N/A".to_string()));
+            println!(
+                "PID:     {}",
+                svc.pid
+                    .map(|p| p.to_string())
+                    .unwrap_or_else(|| "N/A".to_string())
+            );
             println!();
-            println!("(Service is recorded in state but not currently live in this Origin instance)");
+            println!(
+                "(Service is recorded in state but not currently live in this Origin instance)"
+            );
         } else {
             anyhow::bail!("service '{service}' not found in running environment or manifest");
         }
@@ -1373,7 +1417,11 @@ async fn cmd_push(image: &str, config_path: Option<&PathBuf>) -> anyhow::Result<
         .await
         .context("failed to list images")?;
 
-    if !list_output.status.success() || String::from_utf8_lossy(&list_output.stdout).trim().is_empty() {
+    if !list_output.status.success()
+        || String::from_utf8_lossy(&list_output.stdout)
+            .trim()
+            .is_empty()
+    {
         anyhow::bail!(
             "image '{image_ref}' not found locally. Build it first with `tpt origin build`."
         );
@@ -1390,22 +1438,20 @@ async fn cmd_push(image: &str, config_path: Option<&PathBuf>) -> anyhow::Result<
     ];
 
     // Handle authentication via Docker config.json
-    let effective_config = config_path
-        .map(|p| p.to_path_buf())
-        .or_else(|| {
-            let home = std::env::var("HOME").ok().or_else(|| {
-                #[cfg(windows)]
-                {
-                    std::env::var("USERPROFILE").ok()
-                }
-                #[cfg(not(windows))]
-                {
-                    None
-                }
-            });
-            home.map(|h| PathBuf::from(h).join(".docker/config.json"))
-                .filter(|p| p.exists())
+    let effective_config = config_path.map(|p| p.to_path_buf()).or_else(|| {
+        let home = std::env::var("HOME").ok().or_else(|| {
+            #[cfg(windows)]
+            {
+                std::env::var("USERPROFILE").ok()
+            }
+            #[cfg(not(windows))]
+            {
+                None
+            }
         });
+        home.map(|h| PathBuf::from(h).join(".docker/config.json"))
+            .filter(|p| p.exists())
+    });
 
     if let Some(config) = effective_config {
         if let Ok(auth_token) = extract_docker_token(&image_ref, &config) {
@@ -1454,7 +1500,10 @@ fn extract_docker_token(image_ref: &str, config_path: &PathBuf) -> anyhow::Resul
                 return Ok(decoded);
             }
             // Try identitytoken
-            if let Some(token) = registry_config.get("identitytoken").and_then(|v| v.as_str()) {
+            if let Some(token) = registry_config
+                .get("identitytoken")
+                .and_then(|v| v.as_str())
+            {
                 if !token.is_empty() {
                     return Ok(token.to_string());
                 }
@@ -1751,7 +1800,9 @@ async fn cmd_cp(source: &str, destination: &str) -> anyhow::Result<()> {
         }
         // Container -> Container
         (Some(_), Some(_)) => {
-            anyhow::bail!("container-to-container copy is not supported; copy via host as intermediate");
+            anyhow::bail!(
+                "container-to-container copy is not supported; copy via host as intermediate"
+            );
         }
         // Host -> Host
         (None, None) => {
@@ -1817,9 +1868,7 @@ async fn copy_to_container(container_id: &str, src: &str, dst: &str) -> anyhow::
             .to_string(),
     );
 
-    let tar_output = tar_cmd
-        .output()
-        .context("failed to create tar archive")?;
+    let tar_output = tar_cmd.output().context("failed to create tar archive")?;
 
     if !tar_output.status.success() {
         anyhow::bail!(
@@ -1884,9 +1933,7 @@ async fn copy_to_container(container_id: &str, src: &str, dst: &str) -> anyhow::
             .context("failed to write tar data to container")?;
     }
 
-    let status = child
-        .wait()
-        .context("failed to wait for cp command")?;
+    let status = child.wait().context("failed to wait for cp command")?;
 
     if !status.success() {
         anyhow::bail!("failed to copy to container: exit status {status}");
@@ -1969,9 +2016,7 @@ async fn copy_from_container(container_id: &str, src: &str, dst: &str) -> anyhow
             .context("failed to write tar data for extraction")?;
     }
 
-    let status = child
-        .wait()
-        .context("failed to wait for tar extraction")?;
+    let status = child.wait().context("failed to wait for tar extraction")?;
 
     if !status.success() {
         anyhow::bail!("failed to extract from container: exit status {status}");
@@ -2012,7 +2057,9 @@ async fn cmd_pause(service: &str) -> anyhow::Result<()> {
                 .services
                 .iter()
                 .find(|s| s.name == service)
-                .ok_or_else(|| anyhow::anyhow!("service '{service}' not found in running environment"))?;
+                .ok_or_else(|| {
+                    anyhow::anyhow!("service '{service}' not found in running environment")
+                })?;
 
             if svc.service_type == "oci" {
                 // OCI services are frozen via containerd's real cgroup freezer
@@ -2040,7 +2087,9 @@ async fn cmd_pause(service: &str) -> anyhow::Result<()> {
                 #[cfg(not(unix))]
                 {
                     let _ = pid;
-                    anyhow::bail!("pause is only supported on Unix/Linux systems for process services");
+                    anyhow::bail!(
+                        "pause is only supported on Unix/Linux systems for process services"
+                    );
                 }
             } else {
                 anyhow::bail!("service '{service}' has no PID (may not be a process service)");
@@ -2060,7 +2109,9 @@ async fn cmd_unpause(service: &str) -> anyhow::Result<()> {
                 .services
                 .iter()
                 .find(|s| s.name == service)
-                .ok_or_else(|| anyhow::anyhow!("service '{service}' not found in running environment"))?;
+                .ok_or_else(|| {
+                    anyhow::anyhow!("service '{service}' not found in running environment")
+                })?;
 
             if svc.service_type == "oci" {
                 #[cfg(target_os = "linux")]
@@ -2071,7 +2122,9 @@ async fn cmd_unpause(service: &str) -> anyhow::Result<()> {
                 }
                 #[cfg(not(target_os = "linux"))]
                 {
-                    anyhow::bail!("unpausing OCI services requires containerd, which is Linux-only");
+                    anyhow::bail!(
+                        "unpausing OCI services requires containerd, which is Linux-only"
+                    );
                 }
             } else if let Some(pid) = svc.pid {
                 #[cfg(unix)]
@@ -2085,7 +2138,9 @@ async fn cmd_unpause(service: &str) -> anyhow::Result<()> {
                 #[cfg(not(unix))]
                 {
                     let _ = pid;
-                    anyhow::bail!("unpause is only supported on Unix/Linux systems for process services");
+                    anyhow::bail!(
+                        "unpause is only supported on Unix/Linux systems for process services"
+                    );
                 }
             } else {
                 anyhow::bail!("service '{service}' has no PID (may not be a process service)");

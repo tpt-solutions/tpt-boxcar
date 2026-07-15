@@ -964,11 +964,8 @@ pub fn build(config: &BuildConfig) -> Result<BuildResult> {
     let mut final_image_ref = String::new();
 
     for (stage_idx, stage) in dockerfile.stages.iter().enumerate() {
-        let stage_name = stage
-            .from
-            .alias
-            .as_deref()
-            .unwrap_or(&format!("stage-{stage_idx}"));
+        let stage_name_default = format!("stage-{stage_idx}");
+        let stage_name = stage.from.alias.as_deref().unwrap_or(&stage_name_default);
 
         tracing::info!(
             "─── stage {stage_idx}: FROM {} {}",

@@ -240,10 +240,7 @@ mod tests {
             }],
         };
         let args = security_to_ctr_args(&config);
-        assert_eq!(
-            args,
-            vec!["--device", "/dev/nvidia0:/dev/nvidia0:rwm"]
-        );
+        assert_eq!(args, vec!["--device", "/dev/nvidia0:/dev/nvidia0:rwm"]);
     }
 
     #[test]
@@ -260,10 +257,7 @@ mod tests {
             }],
         };
         let args = security_to_ctr_args(&config);
-        assert_eq!(
-            args,
-            vec!["--device", "/dev/nvidia0:/dev/gpu0:rw"]
-        );
+        assert_eq!(args, vec!["--device", "/dev/nvidia0:/dev/gpu0:rw"]);
     }
 
     #[test]

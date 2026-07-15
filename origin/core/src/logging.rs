@@ -212,7 +212,10 @@ mod tests {
         assert_eq!(parse_size_bytes("1g"), Some(1024 * 1024 * 1024));
         assert_eq!(parse_size_bytes("512k"), Some(512 * 1024));
         assert_eq!(parse_size_bytes("100"), Some(100));
-        assert_eq!(parse_size_bytes("1.5m"), Some((1.5 * 1024.0 * 1024.0) as u64));
+        assert_eq!(
+            parse_size_bytes("1.5m"),
+            Some((1.5 * 1024.0 * 1024.0) as u64)
+        );
         assert_eq!(parse_size_bytes(""), None);
     }
 

@@ -266,8 +266,7 @@ impl tpt::tether::pubsub::HostSubscription for WitHostState {
     async fn open(
         &mut self,
         channels: Vec<String>,
-    ) -> Result<wasmtime::component::Resource<tpt::tether::pubsub::Subscription>, TetherError>
-    {
+    ) -> Result<wasmtime::component::Resource<tpt::tether::pubsub::Subscription>, TetherError> {
         require_redis(&self.driver)?;
         let (host, port, username, password) =
             self.conn_info.clone().ok_or(TetherError::NotConnected)?;

@@ -121,7 +121,8 @@ pub fn collect_stats(
                 .map(|t| t.elapsed().as_secs())
                 .unwrap_or(0);
 
-            let (cpu_percent, memory_rss_bytes, net_rx_bytes, net_tx_bytes) = if let Some(pid) = pid {
+            let (cpu_percent, memory_rss_bytes, net_rx_bytes, net_tx_bytes) = if let Some(pid) = pid
+            {
                 let (cpu_ticks, rss) = read_proc_stats(pid).unwrap_or((0, 0));
                 let (rx, tx) = read_net_io(pid).unwrap_or((0, 0));
 
@@ -129,7 +130,10 @@ pub fn collect_stats(
                 // This is cumulative, not instantaneous — for a real-time
                 // view you'd sample twice and diff. Good enough for a snapshot.
                 let cpu = if uptime_secs > 0 {
-                    Some((cpu_ticks as f64 / (uptime_secs as f64 * sys_ticks_per_sec as f64)) * 100.0)
+                    Some(
+                        (cpu_ticks as f64 / (uptime_secs as f64 * sys_ticks_per_sec as f64))
+                            * 100.0,
+                    )
                 } else {
                     None
                 };

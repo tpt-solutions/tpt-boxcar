@@ -221,10 +221,7 @@ impl ContainerdClient {
         let rootless_paths = rootless_containerd_sockets();
         for path in &rootless_paths {
             if path.exists() {
-                tracing::info!(
-                    "using rootless containerd socket: {}",
-                    path.display()
-                );
+                tracing::info!("using rootless containerd socket: {}", path.display());
                 return Self::connect_to(path).await;
             }
         }
@@ -628,6 +625,7 @@ mod tests {
             memory_limit_bytes: Some(64 * 1024 * 1024),
             cpu_limit: None,
             mounts: Vec::new(),
+            security: None,
         };
 
         let pid = client
@@ -691,6 +689,7 @@ mod tests {
             memory_limit_bytes: Some(16 * 1024 * 1024), // 16MiB, far below the 256MiB write attempted above
             cpu_limit: None,
             mounts: Vec::new(),
+            security: None,
         };
 
         client
