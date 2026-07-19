@@ -14,7 +14,7 @@ use crate::manifest::SecurityConfig;
 /// Requires Linux.
 #[cfg(target_os = "linux")]
 pub unsafe fn apply_security_pre_exec(config: &SecurityConfig) {
-    use libc::{prctl, PR_CAPBSET_DROP, PR_CAPBSET_READ, PR_SET_NO_NEW_PRIVS};
+    use libc::{prctl, PR_CAPBSET_DROP, PR_SET_NO_NEW_PRIVS};
 
     if config.no_new_privileges {
         prctl(PR_SET_NO_NEW_PRIVS, 1, 0, 0, 0);

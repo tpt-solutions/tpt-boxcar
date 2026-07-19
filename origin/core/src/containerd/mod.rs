@@ -628,6 +628,7 @@ mod tests {
             memory_limit_bytes: Some(64 * 1024 * 1024),
             cpu_limit: None,
             mounts: Vec::new(),
+            security: None,
         };
 
         let pid = client
@@ -691,6 +692,7 @@ mod tests {
             memory_limit_bytes: Some(16 * 1024 * 1024), // 16MiB, far below the 256MiB write attempted above
             cpu_limit: None,
             mounts: Vec::new(),
+            security: None,
         };
 
         client

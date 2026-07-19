@@ -8,12 +8,10 @@ use wasmtime_wasi::WasiCtxBuilder;
 use crate::envfile;
 use crate::manifest::{Manifest, OCIService, ProcessService, RestartPolicy, Service, WasmService};
 use crate::logging::{self, LogRotation};
+use crate::security;
 
 #[cfg(all(target_os = "linux", feature = "containerd"))]
 use crate::containerd::{ContainerSpec, ContainerdClient};
-
-#[cfg(unix)]
-use std::os::unix::process::CommandExt;
 
 /// Resolves an `OCIService.volumes[].source` to a real host path for a bind
 /// mount. A path-shaped value (starts with `/`, `.`, or `~`) is used as-is;
@@ -628,23 +626,29 @@ impl RuntimeManager {
             let has_security = security_config.no_new_privileges
                 || !security_config.cap_drop.is_empty()
                 || !security_config.cap_add.is_empty();
+            let resources = service.resources.clone();
+            let name_owned = name.to_string();
 
             let apply_rlimits_and_security = move || {
-                if let Some(resources) = &service.resources {
+                if let Some(resources) = &resources {
                     let (memory_bytes, cpu_cores) =
                         crate::reslimit::parse_resource_limits(resources);
                     if cpu_cores.is_some() {
                         tracing::warn!(
-                            "service '{name}' requests a CPU limit, but process services can only \
+                            "service '{name_owned}' requests a CPU limit, but process services can only \
                              enforce memory limits (via RLIMIT_AS) without root/cgroups; ignoring cpu limit"
                         );
                     }
                     if memory_bytes.is_some() {
-                        crate::reslimit::apply_rlimits(memory_bytes, None);
+                        unsafe {
+                            crate::reslimit::apply_rlimits(memory_bytes, None);
+                        }
                     }
                 }
                 if has_security {
-                    security::apply_security_pre_exec(&security_config);
+                    unsafe {
+                        security::apply_security_pre_exec(&security_config);
+                    }
                 }
             };
 
@@ -957,7 +961,7 @@ impl RuntimeManager {
     async fn run_oci_healthcheck(
         &self,
         name: &str,
-        oci: &OCIService,
+        _oci: &OCIService,
         healthcheck: &crate::manifest::HealthCheck,
     ) -> bool {
         use crate::manifest::CheckType;
