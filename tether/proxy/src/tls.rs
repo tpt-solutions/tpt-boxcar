@@ -103,13 +103,13 @@ fn load_key(path: &Path) -> Result<PrivateKeyDer<'static>> {
     for item in rustls_pemfile::read_all(&mut reader) {
         match item.context("failed to parse key")? {
             rustls_pemfile::Item::Pkcs1Key(key) => {
-                return Ok(PrivateKeyDer::Pkcs1(key.into()));
+                return Ok(PrivateKeyDer::Pkcs1(key));
             }
             rustls_pemfile::Item::Pkcs8Key(key) => {
-                return Ok(PrivateKeyDer::Pkcs8(key.into()));
+                return Ok(PrivateKeyDer::Pkcs8(key));
             }
             rustls_pemfile::Item::Sec1Key(key) => {
-                return Ok(PrivateKeyDer::Sec1(key.into()));
+                return Ok(PrivateKeyDer::Sec1(key));
             }
             _ => continue,
         }

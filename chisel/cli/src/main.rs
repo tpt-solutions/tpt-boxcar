@@ -1,4 +1,4 @@
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use clap::{Parser, Subcommand};
 use tpt_chisel_core::analyzer::Analyzer;
@@ -177,7 +177,7 @@ async fn cmd_distill(
 
 async fn cmd_migrate(
     image: &PathBuf,
-    config_path: &PathBuf,
+    config_path: &Path,
     ai_override: Option<&str>,
 ) -> anyhow::Result<()> {
     let config = config::load(config_path)?;
@@ -216,7 +216,7 @@ async fn cmd_migrate(
 
 async fn cmd_audit(
     image: &PathBuf,
-    config_path: &PathBuf,
+    config_path: &Path,
     ai_override: Option<&str>,
 ) -> anyhow::Result<()> {
     let config = config::load(config_path)?;

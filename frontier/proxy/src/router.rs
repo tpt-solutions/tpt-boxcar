@@ -23,6 +23,12 @@ pub struct Router {
     upstreams: HashMap<String, Arc<dyn LoadBalancer>>,
 }
 
+impl Default for Router {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl Router {
     pub fn new() -> Self {
         Self {
@@ -33,7 +39,7 @@ impl Router {
 
     pub fn add_rule(&mut self, rule: RouteRule) {
         self.rules.push(rule);
-        self.rules.sort_by(|a, b| b.priority.cmp(&a.priority));
+        self.rules.sort_by_key(|r| std::cmp::Reverse(r.priority));
     }
 
     pub fn register_upstream(&mut self, name: String, lb: Arc<dyn LoadBalancer>) {

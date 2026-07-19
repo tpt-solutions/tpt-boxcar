@@ -1075,20 +1075,15 @@ impl RuntimeManager {
         let timeout = std::time::Duration::from_secs(healthcheck.timeout_secs);
 
         // ureq is synchronous, so spawn_blocking to avoid blocking the async runtime
-        match tokio::task::spawn_blocking(move || {
-            match ureq::get(&url).timeout(timeout).call() {
-                Ok(response) => {
-                    let status = response.status();
-                    (200..400).contains(&status)
-                }
-                Err(_) => false,
+        tokio::task::spawn_blocking(move || match ureq::get(&url).timeout(timeout).call() {
+            Ok(response) => {
+                let status = response.status();
+                (200..400).contains(&status)
             }
+            Err(_) => false,
         })
         .await
-        {
-            Ok(result) => result,
-            Err(_) => false,
-        }
+        .unwrap_or_default()
     }
 
     async fn run_tcp_healthcheck(
@@ -1102,10 +1097,10 @@ impl RuntimeManager {
         let timeout = std::time::Duration::from_secs(healthcheck.timeout_secs);
         let addr = format!("127.0.0.1:{port}");
 
-        match tokio::time::timeout(timeout, tokio::net::TcpStream::connect(&addr)).await {
-            Ok(Ok(_)) => true,
-            _ => false,
-        }
+        matches!(
+            tokio::time::timeout(timeout, tokio::net::TcpStream::connect(&addr)).await,
+            Ok(Ok(_))
+        )
     }
 
     pub fn get_status(&self, name: &str) -> Option<&ServiceStatus> {

@@ -68,7 +68,7 @@ fn bench_mark_healthy_cycle(c: &mut Criterion) {
     c.bench_function("mark_healthy_cycle", |b| {
         b.iter(|| {
             for ep in &endpoints {
-                black_box(balancer.mark_healthy(ep));
+                balancer.mark_healthy(black_box(ep));
             }
             black_box(balancer.next_endpoint())
         })

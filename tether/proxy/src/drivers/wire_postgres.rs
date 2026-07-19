@@ -114,7 +114,7 @@ impl PostgresWireDriver {
     /// Encode a parameter value as PostgreSQL binary text format.
     fn encode_param(val: &serde_json::Value) -> Vec<u8> {
         match val {
-            serde_json::Value::Null => return b"NULL".to_vec(),
+            serde_json::Value::Null => b"NULL".to_vec(),
             serde_json::Value::Bool(b) => b.to_string().into_bytes(),
             serde_json::Value::Number(n) => {
                 if let Some(i) = n.as_i64() {
@@ -582,7 +582,7 @@ impl PostgresWireDriver {
                                                 server_nonce,
                                                 base64::Engine::encode(
                                                     &base64::engine::general_purpose::STANDARD,
-                                                    &client_proof,
+                                                    client_proof,
                                                 )
                                             );
 

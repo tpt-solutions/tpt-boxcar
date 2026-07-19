@@ -84,11 +84,20 @@ pub enum SandboxStatus {
 }
 
 pub trait SandboxProvider: Send + Sync {
-    async fn start_sandbox(&self, config: &SandboxConfig) -> Result<SandboxInfo>;
-    async fn stop_sandbox(&self, sandbox_id: &str) -> Result<()>;
-    async fn collect_traces(&self, sandbox_id: &str) -> Result<SandboxResult>;
-    async fn list_sandboxes(&self) -> Result<Vec<SandboxInfo>>;
-    async fn get_status(&self, sandbox_id: &str) -> Result<SandboxStatus>;
+    fn start_sandbox(
+        &self,
+        config: &SandboxConfig,
+    ) -> impl std::future::Future<Output = Result<SandboxInfo>> + Send;
+    fn stop_sandbox(&self, sandbox_id: &str) -> impl std::future::Future<Output = Result<()>> + Send;
+    fn collect_traces(
+        &self,
+        sandbox_id: &str,
+    ) -> impl std::future::Future<Output = Result<SandboxResult>> + Send;
+    fn list_sandboxes(&self) -> impl std::future::Future<Output = Result<Vec<SandboxInfo>>> + Send;
+    fn get_status(
+        &self,
+        sandbox_id: &str,
+    ) -> impl std::future::Future<Output = Result<SandboxStatus>> + Send;
 }
 
 pub struct SandboxRunner {

@@ -111,7 +111,7 @@ pub enum BuildConfig {
     /// Simple form: just a path to the build context.
     Path(String),
     /// Detailed form with full build options.
-    Details(BuildDetails),
+    Details(Box<BuildDetails>),
 }
 
 /// Detailed build configuration, analogous to Docker Compose's `build:` object.
@@ -250,6 +250,11 @@ fn default_device_permissions() -> String {
     "rwm".to_string()
 }
 
+// OCIService is much larger than the other variants, but this enum is
+// matched by value/reference at ~90 call sites across the crate; boxing it
+// would touch all of them for a memory-layout lint with no correctness
+// implication, so it's suppressed here instead.
+#[allow(clippy::large_enum_variant)]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type")]
 pub enum Service {
@@ -675,193 +680,6 @@ pub struct Volume {
     pub driver: Option<String>,
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_parse_minimal_manifest() {
-        let yaml = r#"
-name: my-app
-services:
-  db:
-    type: oci
-    image: postgres:16
-  api:
-    type: wasm
-    path: ./target/api.wasm
-    depends_on:
-      - db
-"#;
-        let manifest: Manifest = serde_yaml::from_str(yaml).unwrap();
-        assert_eq!(manifest.name, "my-app");
-        assert_eq!(manifest.services.len(), 2);
-    }
-
-    #[test]
-    fn test_parse_full_manifest() {
-        let yaml = r#"
-name: full-app
-version: "1.0"
-services:
-  db:
-    type: oci
-    image: postgres:16
-    ports:
-      - host: 5432
-        container: 5432
-    environment:
-      POSTGRES_PASSWORD: secret
-    volumes:
-      - source: pgdata
-        target: /var/lib/postgresql/data
-    healthcheck:
-      command: ["pg_isready"]
-      interval_secs: 10
-      timeout_secs: 5
-      retries: 5
-    resources:
-      cpu: "1.0"
-      memory: "512m"
-  api:
-    type: wasm
-    path: ./target/api.wasm
-    args: ["--port", "8080"]
-    environment:
-      DB_HOST: db
-    memory_limit: "256m"
-    depends_on:
-      - db
-networks:
-  default:
-    driver: bridge
-volumes:
-  pgdata: {}
-"#;
-        let manifest: Manifest = serde_yaml::from_str(yaml).unwrap();
-        assert_eq!(manifest.services.len(), 2);
-        assert!(manifest.networks.contains_key("default"));
-        assert!(manifest.volumes.contains_key("pgdata"));
-    }
-
-    #[test]
-    fn test_parse_env_file_and_secrets() {
-        let yaml = r#"
-name: secrets-app
-services:
-  api:
-    type: oci
-    image: myapp:latest
-    env_file:
-      - .env
-      - .env.local
-    secrets:
-      - name: db_password
-        source: ./secrets/db_password.txt
-        target: /run/secrets/db_password
-        mode: "0400"
-    security:
-      cap_drop:
-        - ALL
-      cap_add:
-        - NET_BIND_SERVICE
-      read_only: true
-      no_new_privileges: true
-"#;
-        let manifest: Manifest = serde_yaml::from_str(yaml).unwrap();
-        let api = match manifest.services.get("api").unwrap() {
-            Service::OCI(s) => s,
-            _ => panic!("expected OCI service"),
-        };
-        assert_eq!(
-            api.env_file,
-            Some(vec![".env".to_string(), ".env.local".to_string()])
-        );
-        let secrets = api.secrets.as_ref().unwrap();
-        assert_eq!(secrets.len(), 1);
-        assert_eq!(secrets[0].name, "db_password");
-        assert_eq!(secrets[0].target, "/run/secrets/db_password");
-        assert_eq!(secrets[0].mode, "0400");
-
-        let security = api.security.as_ref().unwrap();
-        assert_eq!(security.cap_drop, vec!["ALL"]);
-        assert_eq!(security.cap_add, vec!["NET_BIND_SERVICE"]);
-        assert!(security.read_only);
-        assert!(security.no_new_privileges);
-    }
-
-    #[test]
-    fn test_parse_process_service_with_security() {
-        let yaml = r#"
-name: process-app
-services:
-  worker:
-    type: process
-    command: ["./worker"]
-    security:
-      cap_drop:
-        - ALL
-      no_new_privileges: true
-"#;
-        let manifest: Manifest = serde_yaml::from_str(yaml).unwrap();
-        let worker = match manifest.services.get("worker").unwrap() {
-            Service::Process(s) => s,
-            _ => panic!("expected Process service"),
-        };
-        let security = worker.security.as_ref().unwrap();
-        assert_eq!(security.cap_drop, vec!["ALL"]);
-        assert!(security.no_new_privileges);
-    }
-
-    #[test]
-    fn test_parse_wasm_service_with_env_file() {
-        let yaml = r#"
-name: wasm-app
-services:
-  handler:
-    type: wasm
-    path: ./handler.wasm
-    env_file:
-      - secrets.env
-    secrets:
-      - name: api_key
-        source: ./keys/api_key.txt
-        target: /tmp/api_key
-"#;
-        let manifest: Manifest = serde_yaml::from_str(yaml).unwrap();
-        let handler = match manifest.services.get("handler").unwrap() {
-            Service::Wasm(s) => s,
-            _ => panic!("expected Wasm service"),
-        };
-        assert_eq!(handler.env_file, Some(vec!["secrets.env".to_string()]));
-        assert!(handler.secrets.is_some());
-    }
-
-    #[test]
-    fn test_service_accessor_methods() {
-        let yaml = r#"
-name: accessor-test
-services:
-  api:
-    type: process
-    command: ["./api"]
-    env_file:
-      - .env
-    secrets:
-      - name: key
-        source: ./key.txt
-        target: /key
-    security:
-      read_only: true
-"#;
-        let manifest: Manifest = serde_yaml::from_str(yaml).unwrap();
-        let api = manifest.services.get("api").unwrap();
-        assert!(api.env_file().is_some());
-        assert!(api.secrets().is_some());
-        assert!(api.security().is_some());
-    }
-}
-
 /// Interpolates `${VAR}` and `${VAR:-default}` patterns in a string value.
 /// Uses environment variables and an optional overrides map. The overrides
 /// map takes precedence over environment variables.
@@ -1174,3 +992,191 @@ pub fn filter_by_profiles(manifest: &Manifest, active_profiles: &[String]) -> Ma
     });
     filtered
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_parse_minimal_manifest() {
+        let yaml = r#"
+name: my-app
+services:
+  db:
+    type: oci
+    image: postgres:16
+  api:
+    type: wasm
+    path: ./target/api.wasm
+    depends_on:
+      - db
+"#;
+        let manifest: Manifest = serde_yaml::from_str(yaml).unwrap();
+        assert_eq!(manifest.name, "my-app");
+        assert_eq!(manifest.services.len(), 2);
+    }
+
+    #[test]
+    fn test_parse_full_manifest() {
+        let yaml = r#"
+name: full-app
+version: "1.0"
+services:
+  db:
+    type: oci
+    image: postgres:16
+    ports:
+      - host: 5432
+        container: 5432
+    environment:
+      POSTGRES_PASSWORD: secret
+    volumes:
+      - source: pgdata
+        target: /var/lib/postgresql/data
+    healthcheck:
+      command: ["pg_isready"]
+      interval_secs: 10
+      timeout_secs: 5
+      retries: 5
+    resources:
+      cpu: "1.0"
+      memory: "512m"
+  api:
+    type: wasm
+    path: ./target/api.wasm
+    args: ["--port", "8080"]
+    environment:
+      DB_HOST: db
+    memory_limit: "256m"
+    depends_on:
+      - db
+networks:
+  default:
+    driver: bridge
+volumes:
+  pgdata: {}
+"#;
+        let manifest: Manifest = serde_yaml::from_str(yaml).unwrap();
+        assert_eq!(manifest.services.len(), 2);
+        assert!(manifest.networks.contains_key("default"));
+        assert!(manifest.volumes.contains_key("pgdata"));
+    }
+
+    #[test]
+    fn test_parse_env_file_and_secrets() {
+        let yaml = r#"
+name: secrets-app
+services:
+  api:
+    type: oci
+    image: myapp:latest
+    env_file:
+      - .env
+      - .env.local
+    secrets:
+      - name: db_password
+        source: ./secrets/db_password.txt
+        target: /run/secrets/db_password
+        mode: "0400"
+    security:
+      cap_drop:
+        - ALL
+      cap_add:
+        - NET_BIND_SERVICE
+      read_only: true
+      no_new_privileges: true
+"#;
+        let manifest: Manifest = serde_yaml::from_str(yaml).unwrap();
+        let api = match manifest.services.get("api").unwrap() {
+            Service::OCI(s) => s,
+            _ => panic!("expected OCI service"),
+        };
+        assert_eq!(
+            api.env_file,
+            Some(vec![".env".to_string(), ".env.local".to_string()])
+        );
+        let secrets = api.secrets.as_ref().unwrap();
+        assert_eq!(secrets.len(), 1);
+        assert_eq!(secrets[0].name, "db_password");
+        assert_eq!(secrets[0].target, "/run/secrets/db_password");
+        assert_eq!(secrets[0].mode, "0400");
+
+        let security = api.security.as_ref().unwrap();
+        assert_eq!(security.cap_drop, vec!["ALL"]);
+        assert_eq!(security.cap_add, vec!["NET_BIND_SERVICE"]);
+        assert!(security.read_only);
+        assert!(security.no_new_privileges);
+    }
+
+    #[test]
+    fn test_parse_process_service_with_security() {
+        let yaml = r#"
+name: process-app
+services:
+  worker:
+    type: process
+    command: ["./worker"]
+    security:
+      cap_drop:
+        - ALL
+      no_new_privileges: true
+"#;
+        let manifest: Manifest = serde_yaml::from_str(yaml).unwrap();
+        let worker = match manifest.services.get("worker").unwrap() {
+            Service::Process(s) => s,
+            _ => panic!("expected Process service"),
+        };
+        let security = worker.security.as_ref().unwrap();
+        assert_eq!(security.cap_drop, vec!["ALL"]);
+        assert!(security.no_new_privileges);
+    }
+
+    #[test]
+    fn test_parse_wasm_service_with_env_file() {
+        let yaml = r#"
+name: wasm-app
+services:
+  handler:
+    type: wasm
+    path: ./handler.wasm
+    env_file:
+      - secrets.env
+    secrets:
+      - name: api_key
+        source: ./keys/api_key.txt
+        target: /tmp/api_key
+"#;
+        let manifest: Manifest = serde_yaml::from_str(yaml).unwrap();
+        let handler = match manifest.services.get("handler").unwrap() {
+            Service::Wasm(s) => s,
+            _ => panic!("expected Wasm service"),
+        };
+        assert_eq!(handler.env_file, Some(vec!["secrets.env".to_string()]));
+        assert!(handler.secrets.is_some());
+    }
+
+    #[test]
+    fn test_service_accessor_methods() {
+        let yaml = r#"
+name: accessor-test
+services:
+  api:
+    type: process
+    command: ["./api"]
+    env_file:
+      - .env
+    secrets:
+      - name: key
+        source: ./key.txt
+        target: /key
+    security:
+      read_only: true
+"#;
+        let manifest: Manifest = serde_yaml::from_str(yaml).unwrap();
+        let api = manifest.services.get("api").unwrap();
+        assert!(api.env_file().is_some());
+        assert!(api.secrets().is_some());
+        assert!(api.security().is_some());
+    }
+}
+
