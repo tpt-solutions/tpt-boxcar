@@ -159,6 +159,12 @@ pub struct ProbeManager {
     probes: HashMap<String, Box<dyn Probe>>,
 }
 
+impl Default for ProbeManager {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl ProbeManager {
     pub fn new() -> Self {
         Self {
