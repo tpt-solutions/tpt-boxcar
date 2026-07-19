@@ -221,10 +221,7 @@ impl ContainerdClient {
         let rootless_paths = rootless_containerd_sockets();
         for path in &rootless_paths {
             if path.exists() {
-                tracing::info!(
-                    "using rootless containerd socket: {}",
-                    path.display()
-                );
+                tracing::info!("using rootless containerd socket: {}", path.display());
                 return Self::connect_to(path).await;
             }
         }

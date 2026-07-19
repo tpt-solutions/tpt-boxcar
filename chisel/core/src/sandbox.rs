@@ -88,7 +88,10 @@ pub trait SandboxProvider: Send + Sync {
         &self,
         config: &SandboxConfig,
     ) -> impl std::future::Future<Output = Result<SandboxInfo>> + Send;
-    fn stop_sandbox(&self, sandbox_id: &str) -> impl std::future::Future<Output = Result<()>> + Send;
+    fn stop_sandbox(
+        &self,
+        sandbox_id: &str,
+    ) -> impl std::future::Future<Output = Result<()>> + Send;
     fn collect_traces(
         &self,
         sandbox_id: &str,

@@ -6,8 +6,8 @@ use wasmtime_wasi::preview1::WasiP1Ctx;
 use wasmtime_wasi::WasiCtxBuilder;
 
 use crate::envfile;
-use crate::manifest::{Manifest, OCIService, ProcessService, RestartPolicy, Service, WasmService};
 use crate::logging::{self, LogRotation};
+use crate::manifest::{Manifest, OCIService, ProcessService, RestartPolicy, Service, WasmService};
 use crate::security;
 
 #[cfg(all(target_os = "linux", feature = "containerd"))]
@@ -363,7 +363,10 @@ impl RuntimeManager {
         if let Some(secrets) = &service.secrets {
             for secret in secrets {
                 let source = envfile::resolve_secret_source(
-                    secret.source.as_deref().unwrap_or_else(|| std::path::Path::new(".")),
+                    secret
+                        .source
+                        .as_deref()
+                        .unwrap_or_else(|| std::path::Path::new(".")),
                     std::path::Path::new("."),
                 )?;
                 mounts.push(crate::containerd::MountSpec {
@@ -464,7 +467,10 @@ impl RuntimeManager {
         if let Some(secrets) = &service.secrets {
             for secret in secrets {
                 let source = envfile::resolve_secret_source(
-                    secret.source.as_deref().unwrap_or_else(|| std::path::Path::new(".")),
+                    secret
+                        .source
+                        .as_deref()
+                        .unwrap_or_else(|| std::path::Path::new(".")),
                     std::path::Path::new("."),
                 )?;
                 match envfile::read_secret(&source) {
@@ -587,7 +593,10 @@ impl RuntimeManager {
         if let Some(secrets) = &service.secrets {
             for secret in secrets {
                 let source = envfile::resolve_secret_source(
-                    secret.source.as_deref().unwrap_or_else(|| std::path::Path::new(".")),
+                    secret
+                        .source
+                        .as_deref()
+                        .unwrap_or_else(|| std::path::Path::new(".")),
                     std::path::Path::new("."),
                 )?;
                 match envfile::read_secret(&source) {
@@ -752,7 +761,9 @@ impl RuntimeManager {
             if let Some(container_id) = svc.containerd_container_id.clone() {
                 if let Some(client) = self.containerd.as_ref() {
                     if let Err(e) = client.pause_container(&container_id).await {
-                        tracing::warn!("failed to pause containerd container '{container_id}': {e}");
+                        tracing::warn!(
+                            "failed to pause containerd container '{container_id}': {e}"
+                        );
                     }
                 }
             }
@@ -920,16 +931,12 @@ impl RuntimeManager {
             }
 
             let healthy = match service {
-                Service::OCI(oci) => {
-                    self.run_oci_healthcheck(&name, oci, healthcheck).await
-                }
+                Service::OCI(oci) => self.run_oci_healthcheck(&name, oci, healthcheck).await,
                 Service::Process(process) => {
                     self.run_process_healthcheck(&name, process, healthcheck)
                         .await
                 }
-                Service::Wasm(wasm) => {
-                    self.run_wasm_healthcheck(&name, wasm, healthcheck).await
-                }
+                Service::Wasm(wasm) => self.run_wasm_healthcheck(&name, wasm, healthcheck).await,
             };
 
             if let Some(svc) = self.services.get_mut(&name) {
@@ -987,12 +994,8 @@ impl RuntimeManager {
                     .await
                     .unwrap_or(false)
             }
-            CheckType::Http => {
-                self.run_http_healthcheck(healthcheck).await
-            }
-            CheckType::Tcp => {
-                self.run_tcp_healthcheck(healthcheck).await
-            }
+            CheckType::Http => self.run_http_healthcheck(healthcheck).await,
+            CheckType::Tcp => self.run_tcp_healthcheck(healthcheck).await,
         }
     }
 
@@ -1062,10 +1065,7 @@ impl RuntimeManager {
         }
     }
 
-    async fn run_http_healthcheck(
-        &self,
-        healthcheck: &crate::manifest::HealthCheck,
-    ) -> bool {
+    async fn run_http_healthcheck(&self, healthcheck: &crate::manifest::HealthCheck) -> bool {
         let port = match healthcheck.port {
             Some(p) => p,
             None => return false,
@@ -1086,10 +1086,7 @@ impl RuntimeManager {
         .unwrap_or_default()
     }
 
-    async fn run_tcp_healthcheck(
-        &self,
-        healthcheck: &crate::manifest::HealthCheck,
-    ) -> bool {
+    async fn run_tcp_healthcheck(&self, healthcheck: &crate::manifest::HealthCheck) -> bool {
         let port = match healthcheck.port {
             Some(p) => p,
             None => return false,

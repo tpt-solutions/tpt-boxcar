@@ -44,9 +44,6 @@ fn main() {
         features: &[],
     };
 
-    aya_build::build_ebpf(
-        [package],
-        aya_build::Toolchain::Nightly,
-    )
-    .expect("failed to build scope-ebpf-probe");
+    aya_build::build_ebpf([package], aya_build::Toolchain::Nightly)
+        .expect("failed to build scope-ebpf-probe");
 }

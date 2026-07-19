@@ -138,7 +138,10 @@ pub trait TracerProvider {
         &self,
         trace_id: &str,
     ) -> impl std::future::Future<Output = Result<FileAccessTrace>> + Send;
-    fn get_stats(&self, trace_id: &str) -> impl std::future::Future<Output = Result<EbpfStats>> + Send;
+    fn get_stats(
+        &self,
+        trace_id: &str,
+    ) -> impl std::future::Future<Output = Result<EbpfStats>> + Send;
 }
 
 pub struct EbpfTracer {

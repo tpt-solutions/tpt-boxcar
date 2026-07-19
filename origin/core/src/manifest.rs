@@ -795,7 +795,9 @@ fn resolve_extends_recursive(
             .services
             .get(base_name)
             .cloned()
-            .ok_or_else(|| format!("base service '{base_name}' not found in extends file '{file}'"))?
+            .ok_or_else(|| {
+                format!("base service '{base_name}' not found in extends file '{file}'")
+            })?
     } else {
         source
             .get(base_name)
@@ -804,14 +806,7 @@ fn resolve_extends_recursive(
     };
 
     // Resolve the base service recursively
-    resolve_extends_recursive(
-        base_name,
-        &base_service,
-        target,
-        source,
-        visited,
-        resolving,
-    )?;
+    resolve_extends_recursive(base_name, &base_service, target, source, visited, resolving)?;
 
     // Merge the base service into the current service
     match (&service, &base_service) {
@@ -1179,4 +1174,3 @@ services:
         assert!(api.security().is_some());
     }
 }
-
