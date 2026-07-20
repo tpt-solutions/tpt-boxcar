@@ -76,6 +76,59 @@ fn next_exec_id() -> u64 {
     NEXT.fetch_add(1, Ordering::Relaxed)
 }
 
+/// Disables swap for `pid`'s memory cgroup so a memory limit is a hard
+/// ceiling (SIGKILL on exceed) instead of just a trigger for the kernel to
+/// swap the task's pages out. Supports both cgroup v2 (unified hierarchy)
+/// and cgroup v1 (`memory` controller); on v1 the "no swap" equivalent is
+/// setting `memory.memsw.limit_in_bytes` equal to `memory.limit_in_bytes`
+/// (memsw is memory+swap combined, so pinning it to the memory limit leaves
+/// no room for swap).
+fn disable_cgroup_swap(pid: u32, memory_limit_bytes: u64) -> Result<()> {
+    let cgroup_path = cgroup_path_for(pid).context("failed to determine task's cgroup path")?;
+
+    if Path::new("/sys/fs/cgroup/cgroup.controllers").exists() {
+        // cgroup v2 unified hierarchy: swap is capped separately from
+        // memory via `memory.swap.max`.
+        let swap_max = format!("/sys/fs/cgroup{}/memory.swap.max", cgroup_path);
+        std::fs::write(&swap_max, "0")
+            .with_context(|| format!("failed to write 0 to {swap_max}"))?;
+    } else {
+        // cgroup v1: no dedicated swap-only knob, but memsw.limit_in_bytes
+        // (memory+swap combined) pinned to the same value as the memory
+        // limit means there's no combined headroom left for swap.
+        let memsw_limit = format!(
+            "/sys/fs/cgroup/memory{}/memory.memsw.limit_in_bytes",
+            cgroup_path
+        );
+        std::fs::write(&memsw_limit, memory_limit_bytes.to_string())
+            .with_context(|| format!("failed to write {memory_limit_bytes} to {memsw_limit}"))?;
+    }
+
+    Ok(())
+}
+
+/// Reads `/proc/<pid>/cgroup` and returns the cgroup path for the relevant
+/// hierarchy: on cgroup v2 that's the single `0::<path>` line; on cgroup v1
+/// it's the line for the `memory` controller.
+fn cgroup_path_for(pid: u32) -> Result<String> {
+    let content = std::fs::read_to_string(format!("/proc/{pid}/cgroup"))
+        .with_context(|| format!("failed to read /proc/{pid}/cgroup"))?;
+
+    for line in content.lines() {
+        // Format: "<hierarchy-id>:<controller-list>:<path>"
+        let mut parts = line.splitn(3, ':');
+        let (_id, controllers, path) = match (parts.next(), parts.next(), parts.next()) {
+            (Some(id), Some(controllers), Some(path)) => (id, controllers, path),
+            _ => continue,
+        };
+        if controllers.is_empty() || controllers.split(',').any(|c| c == "memory") {
+            return Ok(path.to_string());
+        }
+    }
+
+    anyhow::bail!("no memory cgroup entry found in /proc/{pid}/cgroup")
+}
+
 /// Docker lets manifests write a bare image name (`"node:20-alpine"`,
 /// `"postgres:16"`) and implicitly resolves it against Docker Hub as
 /// `docker.io/library/<name>`. containerd's `ctr` has no such implicit
@@ -402,9 +455,29 @@ impl ContainerdClient {
             String::from_utf8_lossy(&output.stderr)
         );
 
-        self.task_pid(id)
+        let pid = self
+            .task_pid(id)
             .await?
-            .with_context(|| format!("container '{id}' started but no task pid was found"))
+            .with_context(|| format!("container '{id}' started but no task pid was found"))?;
+
+        // `ctr run --memory-limit` only sets the cgroup's hard memory limit
+        // (memory.max / memory.limit_in_bytes). Anonymous-like pages
+        // (including tmpfs/shmem) are swappable, so if the host has swap
+        // enabled the kernel will happily swap the task out instead of
+        // OOM-killing it once it crosses that limit — the limit is real but
+        // toothless without also capping swap for the same cgroup. Disable
+        // swap for this task's cgroup so the memory limit is actually a
+        // hard ceiling enforced by SIGKILL, not just a swap trigger.
+        if let Some(bytes) = spec.memory_limit_bytes {
+            if let Err(e) = disable_cgroup_swap(pid, bytes) {
+                tracing::warn!(
+                    "failed to disable swap for container '{id}' (pid {pid}) cgroup, \
+                     memory limit may not trigger an OOM-kill under swap pressure: {e:#}"
+                );
+            }
+        }
+
+        Ok(pid)
     }
 
     /// Runs `command` inside container `id`'s running task via `ctr tasks

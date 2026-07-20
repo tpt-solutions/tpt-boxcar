@@ -19,6 +19,12 @@ jobs:
         with:
           components: clippy, rustfmt
       - uses: Swatinem/rust-cache@v2
+      # containerd-client (a Linux-only dependency of tpt-origin-core, pulled
+      # in unconditionally on this target regardless of the `containerd`
+      # Cargo feature) generates GRPC bindings from .proto files in its
+      # build script and needs `protoc` on PATH to do so.
+      - name: Install protobuf-compiler
+        run: sudo apt-get update && sudo apt-get install -y protobuf-compiler
       - run: cargo fmt --all -- --check
       - run: cargo build --workspace
       - run: cargo test --workspace
