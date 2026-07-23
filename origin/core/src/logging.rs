@@ -120,30 +120,22 @@ impl LogRotation {
         self.writer.get_ref()
     }
 
-    /// Writes data to the log file, triggering rotation if the size
-    /// threshold is exceeded.
+    /// Writes data to the log file, rotating first if this write would push
+    /// the file past `max_size` so the written bytes land in the fresh file.
     pub fn write_all(&mut self, buf: &[u8]) -> io::Result<()> {
+        if let Some(max) = self.max_size_bytes {
+            if max > 0 && self.current_size + buf.len() as u64 >= max {
+                self.rotate()?;
+            }
+        }
         self.writer.write_all(buf)?;
         self.current_size += buf.len() as u64;
-
-        if self.should_rotate() {
-            self.rotate()?;
-        }
         Ok(())
     }
 
     /// Flushes any buffered data to disk.
     pub fn flush(&mut self) -> io::Result<()> {
         self.writer.flush()
-    }
-
-    fn should_rotate(&self) -> bool {
-        if let Some(max) = self.max_size_bytes {
-            if max > 0 && self.current_size >= max {
-                return true;
-            }
-        }
-        false
     }
 
     /// Rotates log files: renames `service.log.N` → `service.log.N+1` for
@@ -156,7 +148,7 @@ impl LogRotation {
 
         let base = &self.path;
         let stem = base
-            .file_stem()
+            .file_name()
             .and_then(|s| s.to_str())
             .unwrap_or("service");
         let parent = base.parent().unwrap_or(Path::new("."));

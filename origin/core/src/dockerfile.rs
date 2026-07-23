@@ -265,6 +265,16 @@ pub fn parse(input: &str) -> Result<Dockerfile> {
             from,
             instructions: current_instructions,
         });
+    } else if !current_instructions.is_empty() {
+        // Instructions with no preceding FROM — treat as implicit scratch stage.
+        stages.push(Stage {
+            from: FromDirective {
+                image: "scratch".to_string(),
+                alias: None,
+                platform: None,
+            },
+            instructions: current_instructions,
+        });
     }
 
     if stages.is_empty() {
