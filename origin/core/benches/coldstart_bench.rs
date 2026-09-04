@@ -1,7 +1,7 @@
 //! Compares Wasm cold-start (fresh `wasmtime::Engine` + compile + instantiate
 //! + call `_start`) against a native process spawn, as a proxy for the
-//! "scale-to-zero density" claim: how many isolated units of work can be
-//! started per second per core.
+//!   "scale-to-zero density" claim: how many isolated units of work can be
+//!   started per second per core.
 //!
 //! `process_cold_start` is NOT a real containerd/OCI cold-start measurement
 //! — there's no containerd integration in this repo to benchmark against

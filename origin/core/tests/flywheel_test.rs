@@ -221,55 +221,53 @@ async fn test_flywheel_origin_to_scope() {
     }
 
     // --- Scope: event ingestion simulation ---
-    let mut events: Vec<ProbeEvent> = Vec::new();
-
-    events.push(ProbeEvent {
-        timestamp: 1700000000,
-        category: ProbeCategory::Network,
-        data: EventData::Network(NetworkEvent {
-            event_type: NetworkEventType::TcpConnect,
-            src_addr: "10.0.0.3".parse().unwrap(),
-            dst_addr: "10.0.0.2".parse().unwrap(),
-            src_port: 45678,
-            dst_port: 5432,
-            bytes: 0,
-            proto: TransportProtocol::Tcp,
-        }),
-        pid: 1001,
-        tid: 1001,
-        comm: "api".to_string(),
-    });
-
-    events.push(ProbeEvent {
-        timestamp: 1700000001,
-        category: ProbeCategory::WasmRuntime,
-        data: EventData::WasmRuntime(WasmEvent {
-            event_type: WasmEventType::Instantiate,
-            module_name: "api".to_string(),
-            instance_id: 1,
-            duration: Duration::from_millis(12),
-        }),
-        pid: 1002,
-        tid: 1002,
-        comm: "wasm-runtime".to_string(),
-    });
-
-    events.push(ProbeEvent {
-        timestamp: 1700000002,
-        category: ProbeCategory::Syscall,
-        data: EventData::Syscall(SyscallEvent {
-            event_type: SyscallEventType::Read,
-            syscall_nr: 63,
-            path: Some("/var/lib/postgresql/data".to_string()),
-            fd: Some(4),
-            bytes_rw: Some(4096),
-            exit_code: 0,
-            latency: Duration::from_micros(150),
-        }),
-        pid: 1001,
-        tid: 1001,
-        comm: "api".to_string(),
-    });
+    let events: Vec<ProbeEvent> = vec![
+        ProbeEvent {
+            timestamp: 1700000000,
+            category: ProbeCategory::Network,
+            data: EventData::Network(NetworkEvent {
+                event_type: NetworkEventType::TcpConnect,
+                src_addr: "10.0.0.3".parse().unwrap(),
+                dst_addr: "10.0.0.2".parse().unwrap(),
+                src_port: 45678,
+                dst_port: 5432,
+                bytes: 0,
+                proto: TransportProtocol::Tcp,
+            }),
+            pid: 1001,
+            tid: 1001,
+            comm: "api".to_string(),
+        },
+        ProbeEvent {
+            timestamp: 1700000001,
+            category: ProbeCategory::WasmRuntime,
+            data: EventData::WasmRuntime(WasmEvent {
+                event_type: WasmEventType::Instantiate,
+                module_name: "api".to_string(),
+                instance_id: 1,
+                duration: Duration::from_millis(12),
+            }),
+            pid: 1002,
+            tid: 1002,
+            comm: "wasm-runtime".to_string(),
+        },
+        ProbeEvent {
+            timestamp: 1700000002,
+            category: ProbeCategory::Syscall,
+            data: EventData::Syscall(SyscallEvent {
+                event_type: SyscallEventType::Read,
+                syscall_nr: 63,
+                path: Some("/var/lib/postgresql/data".to_string()),
+                fd: Some(4),
+                bytes_rw: Some(4096),
+                exit_code: 0,
+                latency: Duration::from_micros(150),
+            }),
+            pid: 1001,
+            tid: 1001,
+            comm: "api".to_string(),
+        },
+    ];
 
     assert_eq!(events.len(), 3);
 
@@ -287,7 +285,7 @@ async fn test_flywheel_origin_to_scope() {
     }
 
     lifecycle.down().await.unwrap();
-    for (_, health) in lifecycle.list_services() {
+    for health in lifecycle.list_services().values() {
         assert_eq!(health.status, ServiceStatus::Running);
     }
 
@@ -319,14 +317,12 @@ async fn test_flywright_dns_network_roundtrip() {
     }
 
     let mut dns = DnsResolver::new();
-    let mut ip_counter = 2u8;
-    for name in manifest.services.keys() {
+    for (ip_counter, name) in (2u8..).zip(manifest.services.keys()) {
         let ip = format!("10.0.0.{ip_counter}");
         dns.add_entry(name, &ip, Some(8080));
-        ip_counter += 1;
     }
 
-    for (name, _) in &manifest.services {
+    for name in manifest.services.keys() {
         let entry = dns.resolve(name).unwrap();
         assert!(!entry.ip.is_empty());
     }

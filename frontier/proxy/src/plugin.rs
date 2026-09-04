@@ -411,14 +411,14 @@ mod tests {
             }, // 1 page cap
         );
         // growing from 1 page (65536 bytes) to 2 pages (131072 bytes) exceeds the cap
-        assert_eq!(limiter.memory_growing(65536, 131072, None).unwrap(), false);
+        assert!(!limiter.memory_growing(65536, 131072, None).unwrap());
     }
 
     #[test]
     fn memory_growth_within_limit_is_allowed() {
         use wasmtime::ResourceLimiter;
         let mut limiter = PluginResourceLimiter::new("test-plugin", ResourceLimits::default());
-        assert_eq!(limiter.memory_growing(0, 65536, None).unwrap(), true);
+        assert!(limiter.memory_growing(0, 65536, None).unwrap());
     }
 
     #[test]
@@ -431,7 +431,7 @@ mod tests {
                 max_table_elements: 10,
             },
         );
-        assert_eq!(limiter.table_growing(0, 11, None).unwrap(), false);
+        assert!(!limiter.table_growing(0, 11, None).unwrap());
     }
 
     /// End-to-end proof that the limit is enforced by a real running wasm

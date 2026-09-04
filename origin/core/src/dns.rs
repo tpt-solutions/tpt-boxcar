@@ -293,6 +293,29 @@ fn build_typed_query(id: u16, name: &str, qtype: u16) -> Vec<u8> {
     packet
 }
 
+/// Decodes a (non-compressed, as sent by a resolver) QNAME starting at
+/// `start`, returning the dotted name and the offset just past the
+/// trailing zero label.
+fn parse_qname(packet: &[u8], start: usize) -> Option<(String, usize)> {
+    let mut labels = Vec::new();
+    let mut pos = start;
+    loop {
+        let len = *packet.get(pos)? as usize;
+        if len == 0 {
+            pos += 1;
+            break;
+        }
+        if len & 0xc0 != 0 {
+            return None; // compression pointers not expected in a query we generate answers for
+        }
+        pos += 1;
+        let label = packet.get(pos..pos + len)?;
+        labels.push(String::from_utf8_lossy(label).to_string());
+        pos += len;
+    }
+    Some((labels.join("."), pos))
+}
+
 #[cfg(test)]
 mod wire_protocol_tests {
     use super::*;
@@ -410,27 +433,4 @@ mod wire_protocol_tests {
 
         resolver.stop().await.unwrap();
     }
-}
-
-/// Decodes a (non-compressed, as sent by a resolver) QNAME starting at
-/// `start`, returning the dotted name and the offset just past the
-/// trailing zero label.
-fn parse_qname(packet: &[u8], start: usize) -> Option<(String, usize)> {
-    let mut labels = Vec::new();
-    let mut pos = start;
-    loop {
-        let len = *packet.get(pos)? as usize;
-        if len == 0 {
-            pos += 1;
-            break;
-        }
-        if len & 0xc0 != 0 {
-            return None; // compression pointers not expected in a query we generate answers for
-        }
-        pos += 1;
-        let label = packet.get(pos..pos + len)?;
-        labels.push(String::from_utf8_lossy(label).to_string());
-        pos += len;
-    }
-    Some((labels.join("."), pos))
 }

@@ -131,9 +131,18 @@ pub struct EbpfStats {
 
 #[allow(async_fn_in_trait)]
 pub trait TracerProvider {
-    async fn start_tracing(&self, config: &TraceConfig) -> Result<String>;
-    async fn stop_tracing(&self, trace_id: &str) -> Result<FileAccessTrace>;
-    async fn get_stats(&self, trace_id: &str) -> Result<EbpfStats>;
+    fn start_tracing(
+        &self,
+        config: &TraceConfig,
+    ) -> impl std::future::Future<Output = Result<String>> + Send;
+    fn stop_tracing(
+        &self,
+        trace_id: &str,
+    ) -> impl std::future::Future<Output = Result<FileAccessTrace>> + Send;
+    fn get_stats(
+        &self,
+        trace_id: &str,
+    ) -> impl std::future::Future<Output = Result<EbpfStats>> + Send;
 }
 
 pub struct EbpfTracer {

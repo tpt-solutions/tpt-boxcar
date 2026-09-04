@@ -543,6 +543,7 @@ async fn run_with_watch(
                         }
                     }
                 }
+                // else: ignore other event types and errors
             }
         }
     }

@@ -140,7 +140,6 @@ struct ConfigSnapshot {
 #[derive(Debug, serde::Deserialize)]
 #[allow(dead_code)]
 struct RouteSnapshot {
-    name: String,
     #[serde(default)]
     prefix: Option<String>,
     cluster: String,
@@ -158,8 +157,6 @@ struct UpstreamSnapshot {
     name: String,
     #[serde(default)]
     endpoints: Vec<String>,
-    #[serde(default)]
-    lb_policy: Option<String>,
 }
 
 /// ConfigWatcher polls a JSON config file and hot-reloads the Router on version change.

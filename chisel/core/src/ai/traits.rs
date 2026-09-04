@@ -7,6 +7,9 @@ use super::error::LlmError;
 /// For trait object support, use the LlmProvider enum in mod.rs.
 #[allow(async_fn_in_trait)]
 pub trait LlmProvider: Send + Sync {
-    async fn complete(&self, prompt: &str) -> Result<String, LlmError>;
+    fn complete(
+        &self,
+        prompt: &str,
+    ) -> impl std::future::Future<Output = Result<String, LlmError>> + Send;
     fn name(&self) -> &str;
 }

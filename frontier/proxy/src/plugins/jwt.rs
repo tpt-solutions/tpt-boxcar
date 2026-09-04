@@ -244,6 +244,6 @@ mod tests {
     #[test]
     fn test_jwt_validator_new() {
         let config = JwtConfig::default();
-        let validator = JwtValidator::new(config);
+        let _validator = JwtValidator::new(config);
     }
 }
