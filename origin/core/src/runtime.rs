@@ -8,6 +8,7 @@ use wasmtime_wasi::WasiCtxBuilder;
 use crate::envfile;
 use crate::logging::{self, LogRotation};
 use crate::manifest::{Manifest, OCIService, ProcessService, RestartPolicy, Service, WasmService};
+#[cfg(unix)]
 use crate::security;
 
 #[cfg(all(target_os = "linux", feature = "containerd"))]
@@ -635,37 +636,32 @@ impl RuntimeManager {
             let has_security = security_config.no_new_privileges
                 || !security_config.cap_drop.is_empty()
                 || !security_config.cap_add.is_empty();
-            let resources = service.resources.clone();
-            let name_owned = name.to_string();
-
-            let apply_rlimits_and_security = move || {
-                if let Some(resources) = &resources {
-                    let (memory_bytes, cpu_cores) =
-                        crate::reslimit::parse_resource_limits(resources);
-                    if cpu_cores.is_some() {
-                        tracing::warn!(
-                            "service '{name_owned}' requests a CPU limit, but process services can only \
-                             enforce memory limits (via RLIMIT_AS) without root/cgroups; ignoring cpu limit"
-                        );
-                    }
-                    if memory_bytes.is_some() {
-                        unsafe {
-                            crate::reslimit::apply_rlimits(memory_bytes, None);
-                        }
-                    }
-                }
-                if has_security {
-                    unsafe {
-                        security::apply_security_pre_exec(&security_config);
-                    }
-                }
-            };
+            // Clone owned data needed inside pre_exec — the closure must be
+            // 'static, so we cannot capture the borrowed `service` or `name`.
+            let service_resources = service.resources.clone();
+            let service_name = name.to_string();
 
             // Only install pre_exec hook if we have something to apply
             if service.resources.is_some() || has_security {
                 unsafe {
                     cmd.pre_exec(move || {
-                        apply_rlimits_and_security();
+                        if let Some(resources) = &service_resources {
+                            let (memory_bytes, cpu_cores) =
+                                crate::reslimit::parse_resource_limits(resources);
+                            if cpu_cores.is_some() {
+                                tracing::warn!(
+                                    "service '{service_name}' requests a CPU limit, but process \
+                                     services can only enforce memory limits (via RLIMIT_AS) \
+                                     without root/cgroups; ignoring cpu limit"
+                                );
+                            }
+                            if memory_bytes.is_some() {
+                                crate::reslimit::apply_rlimits(memory_bytes, None);
+                            }
+                        }
+                        if has_security {
+                            security::apply_security_pre_exec(&security_config);
+                        }
                         Ok(())
                     });
                 }

@@ -120,11 +120,11 @@ impl LogRotation {
         self.writer.get_ref()
     }
 
-    /// Writes data to the log file, rotating first if this write would push
-    /// the file past `max_size` so the written bytes land in the fresh file.
+    /// Writes data to the log file, rotating first if the write would
+    /// push the file over the size limit.
     pub fn write_all(&mut self, buf: &[u8]) -> io::Result<()> {
         if let Some(max) = self.max_size_bytes {
-            if max > 0 && self.current_size + buf.len() as u64 >= max {
+            if max > 0 && self.current_size + buf.len() as u64 > max {
                 self.rotate()?;
             }
         }
@@ -147,15 +147,15 @@ impl LogRotation {
         self.writer.flush()?;
 
         let base = &self.path;
-        let stem = base
+        let base_name = base
             .file_name()
             .and_then(|s| s.to_str())
-            .unwrap_or("service");
+            .unwrap_or("service.log");
         let parent = base.parent().unwrap_or(Path::new("."));
 
         // Drop oldest file if we're at the rotation limit.
         if self.max_file > 0 {
-            let oldest = parent.join(format!("{stem}.{}", self.max_file));
+            let oldest = parent.join(format!("{base_name}.{}", self.max_file));
             if oldest.exists() {
                 let _ = std::fs::remove_file(&oldest);
             }
@@ -163,15 +163,15 @@ impl LogRotation {
 
         // Shift existing rotated files: .N-1 → .N
         for i in (1..self.max_file).rev() {
-            let src = parent.join(format!("{stem}.{i}"));
-            let dst = parent.join(format!("{stem}.{}", i + 1));
+            let src = parent.join(format!("{base_name}.{i}"));
+            let dst = parent.join(format!("{base_name}.{}", i + 1));
             if src.exists() {
                 let _ = std::fs::rename(&src, &dst);
             }
         }
 
         // Rotate current file to .1
-        let rotated = parent.join(format!("{stem}.1"));
+        let rotated = parent.join(format!("{base_name}.1"));
         let _ = std::fs::rename(base, &rotated);
 
         // Create fresh log file.

@@ -138,6 +138,7 @@ struct ConfigSnapshot {
 }
 
 #[derive(Debug, serde::Deserialize)]
+#[allow(dead_code)]
 struct RouteSnapshot {
     #[serde(default)]
     prefix: Option<String>,
@@ -151,6 +152,7 @@ struct RouteSnapshot {
 }
 
 #[derive(Debug, serde::Deserialize)]
+#[allow(dead_code)]
 struct UpstreamSnapshot {
     name: String,
     #[serde(default)]

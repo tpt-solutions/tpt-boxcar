@@ -180,6 +180,25 @@ impl RedisWireDriver {
         Self::read_frame(stream).await
     }
 
+    #[allow(dead_code)]
+    async fn send_and_read_multi(&self, all_args: &[Vec<&str>]) -> Result<Vec<RespFrame>> {
+        let mut guard = self.stream.lock().await;
+        let stream = guard.as_mut().context("not connected")?;
+
+        // Pipeline: write all commands
+        for args in all_args {
+            let encoded = Self::encode_command(args);
+            stream.write_all(&encoded).await?;
+        }
+
+        // Read all responses
+        let mut responses = Vec::with_capacity(all_args.len());
+        for _ in 0..all_args.len() {
+            responses.push(Self::read_frame(stream).await?);
+        }
+        Ok(responses)
+    }
+
     /// Convert a RespFrame to a JSON value for QueryRow results.
     fn frame_to_json(frame: &RespFrame) -> serde_json::Value {
         match frame {

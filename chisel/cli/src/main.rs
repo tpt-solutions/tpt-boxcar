@@ -92,7 +92,7 @@ async fn main() -> anyhow::Result<()> {
     }
 }
 
-async fn cmd_analyze(image: &PathBuf, json: bool) -> anyhow::Result<()> {
+async fn cmd_analyze(image: &Path, json: bool) -> anyhow::Result<()> {
     let analysis = Analyzer::new(image).analyze().await?;
 
     if json {
@@ -121,7 +121,7 @@ async fn cmd_analyze(image: &PathBuf, json: bool) -> anyhow::Result<()> {
 }
 
 async fn cmd_distill(
-    image: &PathBuf,
+    image: &Path,
     dockerfile: bool,
     sbom: Option<&str>,
     json: bool,
@@ -176,7 +176,7 @@ async fn cmd_distill(
 }
 
 async fn cmd_migrate(
-    image: &PathBuf,
+    image: &Path,
     config_path: &Path,
     ai_override: Option<&str>,
 ) -> anyhow::Result<()> {
@@ -215,7 +215,7 @@ async fn cmd_migrate(
 }
 
 async fn cmd_audit(
-    image: &PathBuf,
+    image: &Path,
     config_path: &Path,
     ai_override: Option<&str>,
 ) -> anyhow::Result<()> {

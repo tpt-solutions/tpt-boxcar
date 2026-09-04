@@ -39,7 +39,7 @@ impl Router {
 
     pub fn add_rule(&mut self, rule: RouteRule) {
         self.rules.push(rule);
-        self.rules.sort_by_key(|r| std::cmp::Reverse(r.priority));
+        self.rules.sort_by_key(|b| std::cmp::Reverse(b.priority));
     }
 
     pub fn register_upstream(&mut self, name: String, lb: Arc<dyn LoadBalancer>) {

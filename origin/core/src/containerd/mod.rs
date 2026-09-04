@@ -753,22 +753,40 @@ mod tests {
             command: Some(vec![
                 "sh".to_string(),
                 "-c".to_string(),
-                // Attempts to write far more than the memory limit below;
-                // if the limit is real, the kernel OOM-kills this before it
-                // can complete.
-                "dd if=/dev/zero of=/dev/shm/fill bs=1M count=256".to_string(),
+                // Exponentially doubles a shell string variable (heap/anonymous
+                // memory via malloc).  Hits ~16 MiB in ~24 iterations, at which
+                // point the cgroup OOM killer delivers SIGKILL (exit 137).
+                // Writing to /dev/shm (tmpfs) was unreliable: the write(2)
+                // syscall fails with ENOSPC rather than the process being
+                // killed, producing exit code 1 instead of 137.
+                "s=a; while true; do s=\"$s$s\"; done".to_string(),
             ]),
             env: HashMap::new(),
-            memory_limit_bytes: Some(16 * 1024 * 1024), // 16MiB, far below the 256MiB write attempted above
+            memory_limit_bytes: Some(16 * 1024 * 1024), // 16 MiB — the doubling loop exceeds this quickly
             cpu_limit: None,
             mounts: Vec::new(),
             security: None,
         };
 
-        client
+        let pid = client
             .run_container(&container_id, &spec)
             .await
             .expect("should really create and start the container's task");
+
+        // Disable swap in the container's cgroup so the OOM killer fires
+        // reliably on CI runners that have swap space available.  `ctr run`
+        // has no --memory-swap-limit flag, so we write directly to the
+        // cgroupv2 control file via the pid returned by run_container.
+        if let Ok(cgroup_content) = std::fs::read_to_string(format!("/proc/{pid}/cgroup")) {
+            if let Some(cgroup_path) = cgroup_content
+                .lines()
+                .find(|l| l.starts_with("0::/"))
+                .and_then(|l| l.split("::").nth(1))
+            {
+                let swap_max = format!("/sys/fs/cgroup{cgroup_path}/memory.swap.max");
+                let _ = std::fs::write(&swap_max, "0");
+            }
+        }
 
         let mut tasks = TasksClient::new(client.channel.clone());
         let wait_req = WaitRequest {

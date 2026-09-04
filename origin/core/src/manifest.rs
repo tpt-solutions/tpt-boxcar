@@ -259,7 +259,7 @@ fn default_device_permissions() -> String {
 #[serde(tag = "type")]
 pub enum Service {
     #[serde(rename = "oci")]
-    OCI(OCIService),
+    OCI(Box<OCIService>),
     #[serde(rename = "wasm")]
     Wasm(WasmService),
     #[serde(rename = "process")]

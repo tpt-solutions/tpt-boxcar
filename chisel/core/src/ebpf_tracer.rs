@@ -129,6 +129,7 @@ pub struct EbpfStats {
     pub cpu_time_ns: u64,
 }
 
+#[allow(async_fn_in_trait)]
 pub trait TracerProvider {
     fn start_tracing(
         &self,

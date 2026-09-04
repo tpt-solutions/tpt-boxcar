@@ -10,7 +10,7 @@ fn sample_manifest(wasm_path: std::path::PathBuf) -> Manifest {
     let mut services = HashMap::new();
     services.insert(
         "api".to_string(),
-        Service::OCI(OCIService {
+        Service::OCI(Box::new(OCIService {
             image: "node:20-alpine".to_string(),
             ports: vec![PortMapping {
                 host: 3000,
@@ -38,7 +38,7 @@ fn sample_manifest(wasm_path: std::path::PathBuf) -> Manifest {
             build: None,
             configs: None,
             extends: None,
-        }),
+        })),
     );
     services.insert(
         "transform".to_string(),

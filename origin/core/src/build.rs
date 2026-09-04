@@ -35,6 +35,12 @@ pub struct BuildResult {
     pub layers_created: usize,
 }
 
+/// Recursively deletes a directory and all its contents, ignoring errors.
+#[allow(dead_code)]
+fn cleanup_dir(path: &Path) {
+    let _ = std::fs::remove_dir_all(path);
+}
+
 /// Runs a shell command and returns its output. Fails on non-zero exit.
 fn run_cmd(cmd: &str, args: &[&str]) -> Result<String> {
     let output = std::process::Command::new(cmd)
@@ -46,6 +52,22 @@ fn run_cmd(cmd: &str, args: &[&str]) -> Result<String> {
         bail!("`{cmd} {}` failed: {stderr}", args.join(" "));
     }
     Ok(String::from_utf8_lossy(&output.stdout).to_string())
+}
+
+/// Runs a shell command, inheriting stdio (for interactive/verbose output).
+#[allow(dead_code)]
+fn run_cmd_stdio(cmd: &str, args: &[&str]) -> Result<()> {
+    let status = std::process::Command::new(cmd)
+        .args(args)
+        .stdin(std::process::Stdio::inherit())
+        .stdout(std::process::Stdio::inherit())
+        .stderr(std::process::Stdio::inherit())
+        .status()
+        .with_context(|| format!("failed to spawn `{cmd}`"))?;
+    if !status.success() {
+        bail!("`{cmd} {}` exited with {status}", args.join(" "));
+    }
+    Ok(())
 }
 
 /// Strips the registry prefix from an image reference, returning just
@@ -124,6 +146,23 @@ fn capture_layer_via_ctr(socket: &Path, namespace: &str, container_id: &str) -> 
         .as_str()
         .context("container info missing snapshotKey")?
         .to_string();
+
+    // Use `ctr snapshot diff` to produce a tar of changes vs parent.
+    // If the snapshot has no parent (first layer from base image), we
+    // capture the entire snapshot content.
+    let _parent_key = info["snapshotKey"].as_str().map(|_| {
+        // Compute parent: strip the last component.
+        // containerd snapshot keys look like
+        // "build-<id>-<sha>-0", "build-<id>-<sha>-1", etc.
+        let parts: Vec<&str> = snapshot_key.rsplitn(2, '-').collect();
+        if parts.len() == 2 {
+            // Reconstruct parent by decrementing the numeric suffix.
+            // For simplicity, just use the base image snapshot.
+            format!("parent-{}", container_id)
+        } else {
+            snapshot_key.clone()
+        }
+    });
 
     // Attempt the diff approach — works on containerd >= 1.6.
     // Fallback: read the snapshot mount point directly.
@@ -496,15 +535,15 @@ fn execute_stage(
                 );
             }
             Keyword::From => {
-                // FROM only appears as the stage header, never as a body
-                // instruction — the parser splits it out before this loop runs.
+                // FROM is the stage header — already processed by the caller;
+                // it never appears as an instruction within a stage's body.
             }
         }
     }
 
     // ── 4. Export the final stage filesystem ──
-    let default_stage_name = format!("stage-{stage_idx}");
-    let stage_name = stage.from.alias.as_deref().unwrap_or(&default_stage_name);
+    let stage_name_default = format!("stage-{stage_idx}");
+    let stage_name = stage.from.alias.as_deref().unwrap_or(&stage_name_default);
     let final_image_ref = format!(
         "tpt-boxcar/build/{}:{}",
         short_image_name(&base_ref).replace('/', "-"),
@@ -863,10 +902,10 @@ fn compose_oci_image(
     }
 
     // ── 4. Create the image record in containerd ──
-    let socket_str = socket.to_string_lossy();
+    let socket_lossy = socket.to_string_lossy();
     let mut image_cmd = vec![
         "--address",
-        &socket_str,
+        &socket_lossy,
         "--namespace",
         namespace,
         "images",
@@ -925,8 +964,8 @@ pub fn build(config: &BuildConfig) -> Result<BuildResult> {
     let mut final_image_ref = String::new();
 
     for (stage_idx, stage) in dockerfile.stages.iter().enumerate() {
-        let default_stage_name = format!("stage-{stage_idx}");
-        let stage_name = stage.from.alias.as_deref().unwrap_or(&default_stage_name);
+        let stage_name_default = format!("stage-{stage_idx}");
+        let stage_name = stage.from.alias.as_deref().unwrap_or(&stage_name_default);
 
         tracing::info!(
             "─── stage {stage_idx}: FROM {} {}",
